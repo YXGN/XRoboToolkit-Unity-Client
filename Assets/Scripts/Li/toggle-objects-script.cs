@@ -45,6 +45,7 @@ public class ToggleCameraClippingPlane : MonoBehaviour
     private DisplayMode currentMode;
     private Transform runtimeAnchorTransform;
     private bool anchorSbsPipelineBoundLogged = false;
+    private Material anchorSbsLeftHalfMaterial;
 
     private void Start()
     {
@@ -189,6 +190,20 @@ public class ToggleCameraClippingPlane : MonoBehaviour
         if (anchorSbsRawImage != null && anchorSbsRawImage.texture != remoteCameraWindowComp.Texture)
         {
             anchorSbsRawImage.texture = remoteCameraWindowComp.Texture;
+            // 纹理绑定后恢复全不透明，避免占位态半透明影响图像观察。
+            anchorSbsRawImage.color = Color.white;
+        }
+
+        if (anchorSbsRawImage != null && currentMode == DisplayMode.AnchorSBS)
+        {
+            // 双保险：即使材质采样失效，也通过 uvRect 强制裁切到左半幅。
+            anchorSbsRawImage.uvRect = new Rect(0f, 0f, 0.5f, 1f);
+        }
+
+        if (anchorSbsRawImage != null && currentMode == DisplayMode.AnchorSBS)
+        {
+            // 防止运行期被其它逻辑改回整图采样，AnchorSBS 始终保持左半幅验证链路。
+            anchorSbsRawImage.uvRect = new Rect(0f, 0f, 0.5f, 1f);
         }
 
         // AnchorSBS 模式下记录图像显示 pipeline 首次绑定成功日志，避免每帧刷屏。
@@ -286,6 +301,7 @@ public class ToggleCameraClippingPlane : MonoBehaviour
         rawRt.sizeDelta = rootRt.sizeDelta;
         anchorSbsRawImage = rawObj.GetComponent<RawImage>();
         anchorSbsRawImage.color = anchorFrameFillColor;
+        ApplyAnchorSbsLeftHalfMaterial(anchorSbsRawImage);
 
         // 四条边框线
         CreateFrameEdge(anchorSbsRoot.transform, new Vector2(0f, rootRt.sizeDelta.y * 0.5f), new Vector2(rootRt.sizeDelta.x, anchorFrameLineWidth * 1000f));   // top
@@ -346,7 +362,35 @@ public class ToggleCameraClippingPlane : MonoBehaviour
                        && ReferenceEquals(anchorSbsRawImage.texture, remoteCameraWindowComp.Texture);
 
         LogWindow.Info(
-            $"AnchorSBS pipeline[{stage}]: decoderTex={decoderTex}, anchorRawTex={rawTex}, sameRef={sameRef}, anchorRootActive={(anchorSbsRoot != null && anchorSbsRoot.activeSelf)}");
+            $"AnchorSBS pipeline[{stage}]: decoderTex={decoderTex}, anchorRawTex={rawTex}, sameRef={sameRef}, anchorRootActive={(anchorSbsRoot != null && anchorSbsRoot.activeSelf)}, leftHalfMat={(anchorSbsRawImage != null && anchorSbsRawImage.material != null ? anchorSbsRawImage.material.shader.name : "null")}");
+    }
+
+    /// <summary>
+    /// 给 AnchorSBS 的 RawImage 挂固定“左半幅采样”材质，先验证上屏链路。
+    /// </summary>
+    private void ApplyAnchorSbsLeftHalfMaterial(RawImage rawImage)
+    {
+        if (rawImage == null)
+        {
+            return;
+        }
+
+        if (anchorSbsLeftHalfMaterial == null)
+        {
+            Shader shader = Shader.Find("UI/AnchorSBSLeftHalf");
+            if (shader == null)
+            {
+                LogWindow.Error("AnchorSBS: 未找到 Shader UI/AnchorSBSLeftHalf，保持默认材质。");
+                return;
+            }
+
+            anchorSbsLeftHalfMaterial = new Material(shader);
+            anchorSbsLeftHalfMaterial.name = "AnchorSBS_LeftHalf_RuntimeMat";
+        }
+
+        rawImage.material = anchorSbsLeftHalfMaterial;
+        rawImage.uvRect = new Rect(0f, 0f, 0.5f, 1f);
+        LogWindow.Info("AnchorSBS: 已挂载左半幅采样材质，并设置 uvRect=left-half（双保险）");
     }
 
     /// <summary>
