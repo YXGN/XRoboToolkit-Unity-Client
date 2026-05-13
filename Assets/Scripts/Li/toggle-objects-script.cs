@@ -46,6 +46,9 @@ public class ToggleCameraClippingPlane : MonoBehaviour
     private Transform runtimeAnchorTransform;
     private bool anchorSbsPipelineBoundLogged = false;
     private Material anchorSbsLeftHalfMaterial;
+    // AnchorSBS 右眼（RE）分眼扩展
+    private RawImage anchorSbsRawImageRE;
+    private Material anchorSbsRightHalfMaterial;
 
     private void Start()
     {
@@ -177,40 +180,38 @@ public class ToggleCameraClippingPlane : MonoBehaviour
 
     private void SyncSbsTexture()
     {
-        if (remoteCameraWindowComp == null || remoteCameraWindowComp.Texture == null)
-        {
-            return;
-        }
+        if (remoteCameraWindowComp == null || remoteCameraWindowComp.Texture == null) return;
+        var tex = remoteCameraWindowComp.Texture;
 
-        if (headLockedSbsRawImage != null && headLockedSbsRawImage.texture != remoteCameraWindowComp.Texture)
-        {
-            headLockedSbsRawImage.texture = remoteCameraWindowComp.Texture;
-        }
+        // ── 跟头 SBS ─────────────────────────────────────────────────────────
+        if (headLockedSbsRawImage != null && !ReferenceEquals(headLockedSbsRawImage.texture, tex))
+            headLockedSbsRawImage.texture = tex;
 
-        if (anchorSbsRawImage != null && anchorSbsRawImage.texture != remoteCameraWindowComp.Texture)
+        // ── AnchorSBS 左眼 ────────────────────────────────────────────────────
+        if (anchorSbsRawImage != null && !ReferenceEquals(anchorSbsRawImage.texture, tex))
         {
-            anchorSbsRawImage.texture = remoteCameraWindowComp.Texture;
-            // 纹理绑定后恢复全不透明，避免占位态半透明影响图像观察。
-            anchorSbsRawImage.color = Color.white;
+            anchorSbsRawImage.texture = tex;
+            anchorSbsRawImage.color   = Color.white;
         }
+        // Custom/SampleRT 通过 _mainRT 采样纹理，需同步给材质
+        if (anchorSbsLeftHalfMaterial != null)
+            anchorSbsLeftHalfMaterial.SetTexture("_mainRT", tex);
 
-        if (anchorSbsRawImage != null && currentMode == DisplayMode.AnchorSBS)
+        // ── AnchorSBS 右眼 ────────────────────────────────────────────────────
+        if (anchorSbsRawImageRE != null && !ReferenceEquals(anchorSbsRawImageRE.texture, tex))
         {
-            // 双保险：即使材质采样失效，也通过 uvRect 强制裁切到左半幅。
-            anchorSbsRawImage.uvRect = new Rect(0f, 0f, 0.5f, 1f);
+            anchorSbsRawImageRE.texture = tex;
+            anchorSbsRawImageRE.color   = Color.white;
         }
+        if (anchorSbsRightHalfMaterial != null)
+            anchorSbsRightHalfMaterial.SetTexture("_mainRT", tex);
 
-        if (anchorSbsRawImage != null && currentMode == DisplayMode.AnchorSBS)
-        {
-            // 防止运行期被其它逻辑改回整图采样，AnchorSBS 始终保持左半幅验证链路。
-            anchorSbsRawImage.uvRect = new Rect(0f, 0f, 0.5f, 1f);
-        }
-
-        // AnchorSBS 模式下记录图像显示 pipeline 首次绑定成功日志，避免每帧刷屏。
+        // ── 首次双眼纹理绑定成功日志（避免每帧刷屏）────────────────────────
         if (currentMode == DisplayMode.AnchorSBS && !anchorSbsPipelineBoundLogged)
         {
-            bool textureBound = anchorSbsRawImage != null && anchorSbsRawImage.texture == remoteCameraWindowComp.Texture;
-            if (textureBound)
+            bool leBound = anchorSbsRawImage   != null && ReferenceEquals(anchorSbsRawImage.texture,   tex);
+            bool reBound = anchorSbsRawImageRE != null && ReferenceEquals(anchorSbsRawImageRE.texture, tex);
+            if (leBound && reBound)
             {
                 anchorSbsPipelineBoundLogged = true;
                 LogAnchorSbsPipelineStatus("texture-bound");
@@ -250,6 +251,9 @@ public class ToggleCameraClippingPlane : MonoBehaviour
             Destroy(anchorSbsRoot);
             anchorSbsRoot = null;
             anchorSbsRawImage = null;
+            anchorSbsRawImageRE = null;
+            anchorSbsLeftHalfMaterial = null;
+            anchorSbsRightHalfMaterial = null;
         }
 
         if (anchorTransform == null || headLockedSbsRoot == null)
@@ -261,55 +265,172 @@ public class ToggleCameraClippingPlane : MonoBehaviour
     }
 
     /// <summary>
-    /// 在锚点处创建空白占位画面框（1080:720，横向），后续可直接复用 RawImage 播放图传。
+    /// 在锚点处创建双目分眼画布（左眼/右眼各一个 WorldSpace Canvas）。
+    /// 左眼画布挂载与 SetLERE.CanvLE 相同图层，右眼画布与 CanvRE 相同图层；
+    /// 分别使用 Custom/SampleRT (_isLE=1/0) 采样 SBS 纹理左/右半幅，
+    /// 实现空间锚定画布上的立体分眼图传显示。
     /// </summary>
     private void CreateAnchorPlaceholderFrame(Transform parentAnchor)
     {
-        if (parentAnchor == null)
-        {
-            return;
-        }
+        if (parentAnchor == null) return;
 
         const float frameScale = 2f;
-        float width = anchorFrameHeight * (1080f / 720f) * frameScale;
+        float width  = anchorFrameHeight * (1080f / 720f) * frameScale;
         float height = anchorFrameHeight * frameScale;
+        Vector2 canvasSizeDelta = new Vector2(width * 1000f, height * 1000f);
 
-        anchorSbsRoot = new GameObject("AnchorSBS_FrameRoot", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+        // 从 SetLERE 的现有画布继承左右眼图层，保证与 StereoSplit 模式图层配置完全一致
+        int leLayer = (setLere != null && setLere.CanvLE != null) ? setLere.CanvLE.layer : 0;
+        int reLayer = (setLere != null && setLere.CanvRE != null) ? setLere.CanvRE.layer : 0;
+
+        // 顶层空容器（不含 Canvas），挂在锚点下，统一控制双目画布的显隐
+        anchorSbsRoot = new GameObject("AnchorSBS_Root");
         anchorSbsRoot.transform.SetParent(parentAnchor, false);
         anchorSbsRoot.transform.localPosition = Vector3.zero;
         anchorSbsRoot.transform.localRotation = Quaternion.identity;
-        anchorSbsRoot.transform.localScale = Vector3.one * 0.001f;
+        anchorSbsRoot.transform.localScale    = Vector3.one;
 
-        var rootRt = anchorSbsRoot.GetComponent<RectTransform>();
-        rootRt.sizeDelta = new Vector2(width * 1000f, height * 1000f);
+        // ── 左眼 Canvas（仅左眼摄像机图层可见）──────────────────────────────
+        GameObject leCanvasObj = CreateEyeCanvas("AnchorSBS_Canvas_LE", anchorSbsRoot.transform, leLayer, canvasSizeDelta);
+        anchorSbsRawImage       = CreateEyeRawImage("AnchorSBS_RawImage_LE", leCanvasObj.transform, canvasSizeDelta, leLayer);
+        anchorSbsRawImage.color = anchorFrameFillColor;
 
-        var canvas = anchorSbsRoot.GetComponent<Canvas>();
-        canvas.renderMode = RenderMode.WorldSpace;
-        canvas.worldCamera = Camera.main;
+        // ── 右眼 Canvas（仅右眼摄像机图层可见）──────────────────────────────
+        GameObject reCanvasObj  = CreateEyeCanvas("AnchorSBS_Canvas_RE", anchorSbsRoot.transform, reLayer, canvasSizeDelta);
+        anchorSbsRawImageRE       = CreateEyeRawImage("AnchorSBS_RawImage_RE", reCanvasObj.transform, canvasSizeDelta, reLayer);
+        anchorSbsRawImageRE.color = anchorFrameFillColor;
+
+        // 为双目 RawImage 建立 Custom/SampleRT 材质，_isLE 决定采样左/右半幅
+        SetupAnchorSbsMaterials(anchorSbsRawImage, anchorSbsRawImageRE);
+
+        // 各自画布上绘制边框线（保证双目均能看见边框）
+        CreateFrameEdgesOnCanvas(leCanvasObj.transform, canvasSizeDelta, leLayer);
+        CreateFrameEdgesOnCanvas(reCanvasObj.transform, canvasSizeDelta, reLayer);
+
+        LogWindow.Info(
+            $"AnchorSBS: 已创建双目分眼锚定画布 leLayer={leLayer}, reLayer={reLayer}, " +
+            $"size=({width:F3}m,{height:F3}m) scale=x{frameScale:F1}");
+    }
+
+    /// <summary>创建单眼用 WorldSpace Canvas 节点。</summary>
+    private GameObject CreateEyeCanvas(string name, Transform parent, int layer, Vector2 sizeDelta)
+    {
+        var obj = new GameObject(name, typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler));
+        obj.layer = layer;
+        obj.transform.SetParent(parent, false);
+        obj.transform.localPosition = Vector3.zero;
+        obj.transform.localRotation = Quaternion.identity;
+        obj.transform.localScale    = Vector3.one * 0.001f;
+
+        var rt = obj.GetComponent<RectTransform>();
+        rt.sizeDelta = sizeDelta;
+
+        var canvas = obj.GetComponent<Canvas>();
+        canvas.renderMode   = RenderMode.WorldSpace;
+        canvas.worldCamera  = Camera.main;
         canvas.sortingOrder = anchorSbsCanvasSortingOrder;
 
-        var scaler = anchorSbsRoot.GetComponent<CanvasScaler>();
+        var scaler = obj.GetComponent<CanvasScaler>();
         scaler.dynamicPixelsPerUnit = 10f;
 
-        // 空白占位画面（后续直接挂图传纹理）
-        GameObject rawObj = new GameObject("AnchorSBS_RawImage", typeof(RectTransform), typeof(RawImage));
-        rawObj.transform.SetParent(anchorSbsRoot.transform, false);
-        var rawRt = rawObj.GetComponent<RectTransform>();
-        rawRt.anchorMin = new Vector2(0.5f, 0.5f);
-        rawRt.anchorMax = new Vector2(0.5f, 0.5f);
-        rawRt.pivot = new Vector2(0.5f, 0.5f);
-        rawRt.sizeDelta = rootRt.sizeDelta;
-        anchorSbsRawImage = rawObj.GetComponent<RawImage>();
-        anchorSbsRawImage.color = anchorFrameFillColor;
-        ApplyAnchorSbsLeftHalfMaterial(anchorSbsRawImage);
+        return obj;
+    }
 
-        // 四条边框线
-        CreateFrameEdge(anchorSbsRoot.transform, new Vector2(0f, rootRt.sizeDelta.y * 0.5f), new Vector2(rootRt.sizeDelta.x, anchorFrameLineWidth * 1000f));   // top
-        CreateFrameEdge(anchorSbsRoot.transform, new Vector2(0f, -rootRt.sizeDelta.y * 0.5f), new Vector2(rootRt.sizeDelta.x, anchorFrameLineWidth * 1000f)); // bottom
-        CreateFrameEdge(anchorSbsRoot.transform, new Vector2(-rootRt.sizeDelta.x * 0.5f, 0f), new Vector2(anchorFrameLineWidth * 1000f, rootRt.sizeDelta.y)); // left
-        CreateFrameEdge(anchorSbsRoot.transform, new Vector2(rootRt.sizeDelta.x * 0.5f, 0f), new Vector2(anchorFrameLineWidth * 1000f, rootRt.sizeDelta.y));  // right
+    /// <summary>创建单眼用 RawImage 节点，居中填满父 Canvas。</summary>
+    private RawImage CreateEyeRawImage(string name, Transform parent, Vector2 sizeDelta, int layer)
+    {
+        var obj = new GameObject(name, typeof(RectTransform), typeof(RawImage));
+        obj.layer = layer;
+        obj.transform.SetParent(parent, false);
 
-        LogWindow.Info($"AnchorSBS: 已创建空白占位画面框 ratio=1080:720 scale=x{frameScale:F1} size=({width:F3},{height:F3})");
+        var rt = obj.GetComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0.5f, 0.5f);
+        rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.pivot     = new Vector2(0.5f, 0.5f);
+        rt.sizeDelta = sizeDelta;
+
+        return obj.GetComponent<RawImage>();
+    }
+
+    /// <summary>
+    /// 为 AnchorSBS 双目 RawImage 建立运行时材质。
+    /// 优先使用 Custom/SampleRT（与 SetLERE 完全一致的分眼采样逻辑），
+    /// Shader 缺失时降级为简单 uvRect 裁切。
+    /// </summary>
+    private void SetupAnchorSbsMaterials(RawImage leImage, RawImage reImage)
+    {
+        if (leImage == null || reImage == null) return;
+
+        Shader sampleShader = Shader.Find("Custom/SampleRT");
+        if (sampleShader != null)
+        {
+            // 左眼：_isLE=1，采样 SBS 纹理左半幅
+            anchorSbsLeftHalfMaterial = new Material(sampleShader) { name = "AnchorSBS_LE_RuntimeMat" };
+            anchorSbsLeftHalfMaterial.SetInt("_isLE", 1);
+            CopyAnchorSbsShaderParams(anchorSbsLeftHalfMaterial, setLere != null ? setLere.matLE : null);
+            leImage.material = anchorSbsLeftHalfMaterial;
+
+            // 右眼：_isLE=0，采样 SBS 纹理右半幅
+            anchorSbsRightHalfMaterial = new Material(sampleShader) { name = "AnchorSBS_RE_RuntimeMat" };
+            anchorSbsRightHalfMaterial.SetInt("_isLE", 0);
+            CopyAnchorSbsShaderParams(anchorSbsRightHalfMaterial, setLere != null ? setLere.matRE : null);
+            reImage.material = anchorSbsRightHalfMaterial;
+
+            LogWindow.Info("AnchorSBS: 已创建 Custom/SampleRT 双目运行时材质 (LE _isLE=1 / RE _isLE=0)");
+        }
+        else
+        {
+            // 降级：uvRect 直接裁切左/右半幅
+            leImage.uvRect = new Rect(0f,   0f, 0.5f, 1f);
+            reImage.uvRect = new Rect(0.5f, 0f, 0.5f, 1f);
+            LogWindow.Error("AnchorSBS: Custom/SampleRT Shader 未找到，已降级为 uvRect 模式（LE=左0~0.5，RE=右0.5~1）");
+        }
+    }
+
+    /// <summary>从 SetLERE 现有材质拷贝 SBS shader 参数到目标材质；src 为 null 时使用默认值。</summary>
+    private void CopyAnchorSbsShaderParams(Material dst, Material src)
+    {
+        float visibleRatio    = 0.555f;
+        float contentRatio    = 1.8f;
+        float heightCompress  = 1.333333f;
+
+        if (src != null)
+        {
+            try
+            {
+                visibleRatio   = src.GetFloat("_visibleRatio");
+                contentRatio   = src.GetFloat("_contentRatio");
+                heightCompress = src.GetFloat("_heightCompressionFactor");
+            }
+            catch { /* 材质属性缺失时保持默认值 */ }
+        }
+
+        dst.SetFloat("_visibleRatio",          visibleRatio);
+        dst.SetFloat("_contentRatio",           contentRatio);
+        dst.SetFloat("_heightCompressionFactor", heightCompress);
+    }
+
+    /// <summary>在指定 Canvas 下创建四条边框线，图层与 Canvas 一致。</summary>
+    private void CreateFrameEdgesOnCanvas(Transform canvasTransform, Vector2 sizeDelta, int layer)
+    {
+        CreateFrameEdgeOnLayer(canvasTransform, new Vector2(0f,              sizeDelta.y * 0.5f),  new Vector2(sizeDelta.x, anchorFrameLineWidth * 1000f), layer); // top
+        CreateFrameEdgeOnLayer(canvasTransform, new Vector2(0f,             -sizeDelta.y * 0.5f),  new Vector2(sizeDelta.x, anchorFrameLineWidth * 1000f), layer); // bottom
+        CreateFrameEdgeOnLayer(canvasTransform, new Vector2(-sizeDelta.x * 0.5f, 0f),              new Vector2(anchorFrameLineWidth * 1000f, sizeDelta.y), layer); // left
+        CreateFrameEdgeOnLayer(canvasTransform, new Vector2( sizeDelta.x * 0.5f, 0f),              new Vector2(anchorFrameLineWidth * 1000f, sizeDelta.y), layer); // right
+    }
+
+    private void CreateFrameEdgeOnLayer(Transform parent, Vector2 anchoredPos, Vector2 size, int layer)
+    {
+        var edgeObj = new GameObject("AnchorSBS_FrameEdge", typeof(RectTransform), typeof(Image));
+        edgeObj.layer = layer;
+        edgeObj.transform.SetParent(parent, false);
+        var rt = edgeObj.GetComponent<RectTransform>();
+        rt.anchorMin      = new Vector2(0.5f, 0.5f);
+        rt.anchorMax      = new Vector2(0.5f, 0.5f);
+        rt.pivot          = new Vector2(0.5f, 0.5f);
+        rt.anchoredPosition = anchoredPos;
+        rt.sizeDelta      = size;
+        edgeObj.GetComponent<Image>().color = anchorFrameColor;
     }
 
     private bool BuildRuntimeAnchorFromCurrentHeadPose()
@@ -345,69 +466,28 @@ public class ToggleCameraClippingPlane : MonoBehaviour
     }
 
     /// <summary>
-    /// 记录 AnchorSBS 图像显示 pipeline 关键链路状态：
-    /// MediaDecoder -> RemoteCameraWindow.Texture -> AnchorSBS RawImage.texture
+    /// 记录 AnchorSBS 双目图像显示 pipeline 关键链路状态：
+    /// MediaDecoder → RemoteCameraWindow.Texture → LE/RE RawImage.texture → LE/RE Material._mainRT
     /// </summary>
     private void LogAnchorSbsPipelineStatus(string stage)
     {
         string decoderTex = (remoteCameraWindowComp != null && remoteCameraWindowComp.Texture != null)
-            ? $"{remoteCameraWindowComp.Texture.width}x{remoteCameraWindowComp.Texture.height}"
-            : "null";
-        string rawTex = (anchorSbsRawImage != null && anchorSbsRawImage.texture != null)
-            ? $"{anchorSbsRawImage.texture.width}x{anchorSbsRawImage.texture.height}"
-            : "null";
-        bool sameRef = anchorSbsRawImage != null
-                       && remoteCameraWindowComp != null
-                       && remoteCameraWindowComp.Texture != null
-                       && ReferenceEquals(anchorSbsRawImage.texture, remoteCameraWindowComp.Texture);
+            ? $”{remoteCameraWindowComp.Texture.width}x{remoteCameraWindowComp.Texture.height}” : “null”;
+        string leTex = (anchorSbsRawImage != null && anchorSbsRawImage.texture != null)
+            ? $”{anchorSbsRawImage.texture.width}x{anchorSbsRawImage.texture.height}” : “null”;
+        string reTex = (anchorSbsRawImageRE != null && anchorSbsRawImageRE.texture != null)
+            ? $”{anchorSbsRawImageRE.texture.width}x{anchorSbsRawImageRE.texture.height}” : “null”;
+        bool leRef = anchorSbsRawImage   != null && remoteCameraWindowComp?.Texture != null
+                     && ReferenceEquals(anchorSbsRawImage.texture,   remoteCameraWindowComp.Texture);
+        bool reRef = anchorSbsRawImageRE != null && remoteCameraWindowComp?.Texture != null
+                     && ReferenceEquals(anchorSbsRawImageRE.texture, remoteCameraWindowComp.Texture);
 
         LogWindow.Info(
-            $"AnchorSBS pipeline[{stage}]: decoderTex={decoderTex}, anchorRawTex={rawTex}, sameRef={sameRef}, anchorRootActive={(anchorSbsRoot != null && anchorSbsRoot.activeSelf)}, leftHalfMat={(anchorSbsRawImage != null && anchorSbsRawImage.material != null ? anchorSbsRawImage.material.shader.name : "null")}");
+            $”AnchorSBS pipeline[{stage}]: decoderTex={decoderTex}, “ +
+            $”LE={leTex}(ref={leRef}, mat={ShaderName(anchorSbsLeftHalfMaterial)}), “ +
+            $”RE={reTex}(ref={reRef}, mat={ShaderName(anchorSbsRightHalfMaterial)}), “ +
+            $”rootActive={(anchorSbsRoot != null && anchorSbsRoot.activeSelf)}”);
     }
 
-    /// <summary>
-    /// 给 AnchorSBS 的 RawImage 挂固定“左半幅采样”材质，先验证上屏链路。
-    /// </summary>
-    private void ApplyAnchorSbsLeftHalfMaterial(RawImage rawImage)
-    {
-        if (rawImage == null)
-        {
-            return;
-        }
-
-        if (anchorSbsLeftHalfMaterial == null)
-        {
-            Shader shader = Shader.Find("UI/AnchorSBSLeftHalf");
-            if (shader == null)
-            {
-                LogWindow.Error("AnchorSBS: 未找到 Shader UI/AnchorSBSLeftHalf，保持默认材质。");
-                return;
-            }
-
-            anchorSbsLeftHalfMaterial = new Material(shader);
-            anchorSbsLeftHalfMaterial.name = "AnchorSBS_LeftHalf_RuntimeMat";
-        }
-
-        rawImage.material = anchorSbsLeftHalfMaterial;
-        rawImage.uvRect = new Rect(0f, 0f, 0.5f, 1f);
-        LogWindow.Info("AnchorSBS: 已挂载左半幅采样材质，并设置 uvRect=left-half（双保险）");
-    }
-
-    /// <summary>
-    /// 创建边框线（Image），用于空白占位画面框。
-    /// </summary>
-    private void CreateFrameEdge(Transform parent, Vector2 anchoredPos, Vector2 size)
-    {
-        GameObject edgeObj = new GameObject("AnchorSBS_FrameEdge", typeof(RectTransform), typeof(Image));
-        edgeObj.transform.SetParent(parent, false);
-        var edgeRt = edgeObj.GetComponent<RectTransform>();
-        edgeRt.anchorMin = new Vector2(0.5f, 0.5f);
-        edgeRt.anchorMax = new Vector2(0.5f, 0.5f);
-        edgeRt.pivot = new Vector2(0.5f, 0.5f);
-        edgeRt.anchoredPosition = anchoredPos;
-        edgeRt.sizeDelta = size;
-
-        var edgeImage = edgeObj.GetComponent<Image>();
-        edgeImage.color = anchorFrameColor;
-    }
+    private static string ShaderName(Material m) => m != null ? m.shader.name : “null”;
 }
