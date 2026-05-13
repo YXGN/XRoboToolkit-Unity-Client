@@ -19,6 +19,7 @@ public class SetLERE : MonoBehaviour
     private float visibleRatio = 0.555f;
     private float contentRatio = 1.8f;
     private float heightCompressionFactor = 1.333333f; // 4:3 aspect ratio
+    private bool stereoSplitActive = true;
 
     public void UpdateParameters(float visible, float content, float heightCompression)
     {
@@ -33,17 +34,43 @@ public class SetLERE : MonoBehaviour
     
     public void ResetCanvases()
     {
-        CanvLE.SetActive(false);
-        CanvRE.SetActive(false);
+        if (CanvLE != null) CanvLE.SetActive(false);
+        if (CanvRE != null) CanvRE.SetActive(false);
+    }
+
+    public void SetStereoSplitActive(bool isActive)
+    {
+        // 由外部显示模式控制器调用：非立体分眼模式下，强制关闭双目画布。
+        stereoSplitActive = isActive;
+        if (!stereoSplitActive)
+        {
+            ResetCanvases();
+        }
+        else
+        {
+            // 切回立体分眼时重置一次，触发材质参数与纹理重新绑定。
+            ResetCanvases();
+        }
     }
 
     void Update()
     {
+        if (!stereoSplitActive)
+        {
+            return;
+        }
+
+        if (CanvLE == null || CanvRE == null || remoteCameraWindow == null || matLE == null || matRE == null)
+        {
+            return;
+        }
+
         if ((!CanvLE.activeSelf) || (!CanvRE.activeSelf))
         {
             CanvLE.SetActive(true);
             CanvRE.SetActive(true);
 
+            // 立体分眼模式下，两只眼睛共用同一张解码纹理，仅通过 _isLE 决定采样半幅。
             matLE.SetTexture("_mainRT", remoteCameraWindow.Texture);
             matRE.SetTexture("_mainRT", remoteCameraWindow.Texture);
 

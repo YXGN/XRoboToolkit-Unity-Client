@@ -13,7 +13,7 @@ PlayerSettings:
   useOnDemandResources: 0
   accelerometerFrequency: 60
   companyName: xrobotoolkit
-  productName: XRoboToolkit
+  productName: PicoVRUnity_dev
   defaultCursor: {fileID: 0}
   cursorHotspot: {x: 0, y: 0}
   m_SplashScreenBackgroundColor: {r: 0.12156863, g: 0.12156863, b: 0.1254902, a: 1}
@@ -136,7 +136,7 @@ PlayerSettings:
   vulkanEnableLateAcquireNextImage: 0
   vulkanEnableCommandBufferRecycling: 1
   loadStoreDebugModeEnabled: 0
-  bundleVersion: 1.1.1
+  bundleVersion: 1.0.0
   preloadedAssets:
   - {fileID: 11400000, guid: f2ef844c0e47a5d4297d66125bf1d191, type: 2}
   - {fileID: -8221979108565540337, guid: da34a6e7d51410049b366296e6664eda, type: 2}
@@ -162,7 +162,7 @@ PlayerSettings:
   androidSupportedAspectRatio: 1
   androidMaxAspectRatio: 2.1
   applicationIdentifier:
-    Android: com.xrobotoolkit.client
+    Android: com.xrobotoolkit.client.dev
   buildNumber:
     Standalone: 0
     VisionOS: 0
@@ -263,8 +263,8 @@ PlayerSettings:
   AndroidTargetDevices: 0
   AndroidSplashScreenScale: 0
   androidSplashScreen: {fileID: 0}
-  AndroidKeystoreName: C:/Users/Admin/Documents/lyu20/user.keystore
-  AndroidKeyaliasName: key1
+  AndroidKeystoreName: '{inproject}: user.keystore'
+  AndroidKeyaliasName: 123
   AndroidEnableArmv9SecurityFeatures: 0
   AndroidBuildApkPerCpuArchitecture: 0
   AndroidTVCompatibility: 0
@@ -669,7 +669,7 @@ PlayerSettings:
   webGLMemoryGeometricGrowthCap: 96
   webGLPowerPreference: 2
   scriptingDefineSymbols:
-    Android: VUPLEX_XR_INTERACTION_TOOLKIT;AUTOTEST_BUILD
+    Android: VUPLEX_XR_INTERACTION_TOOLKIT
     Standalone: VUPLEX_XR_INTERACTION_TOOLKIT
   additionalCompilerArguments: {}
   platformArchitecture: {}

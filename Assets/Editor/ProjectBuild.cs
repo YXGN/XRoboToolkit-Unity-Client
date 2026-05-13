@@ -1,4 +1,5 @@
 ﻿using System.IO;
+using System;
 using UnityEditor;
 using UnityEngine;
 using System.Collections.Generic;
@@ -9,6 +10,9 @@ using System.Collections.Generic;
 /// </summary>
 class ProjectBuild : Editor
 {
+    // 编辑器菜单触发时的临时构建口味开关，避免改动原有CI参数解析逻辑。
+    private static bool forceDevFlavorFromMenu = false;
+
     /// <summary>
     /// Gets the output path from args
     /// </summary>
@@ -108,13 +112,57 @@ class ProjectBuild : Editor
     }
 
     /// <summary>
+    /// Gets build flavor from args. stable/dev
+    /// </summary>
+    public static string buildFlavor
+    {
+        get
+        {
+            if (forceDevFlavorFromMenu)
+            {
+                return "dev";
+            }
+
+            foreach (string arg in System.Environment.GetCommandLineArgs())
+            {
+                if (arg.StartsWith("buildFlavor"))
+                {
+                    return arg.Split("="[0])[1];
+                }
+            }
+
+            return "stable";
+        }
+    }
+
+    /// <summary>
     /// Builds for android.
     /// </summary>
     [MenuItem("Build/Andriod")]
     static void BuildForAndroid()
     {
         RemoveAutoTestScriptingDefineSymbol();
+        forceDevFlavorFromMenu = false;
         Build();
+    }
+
+    /// <summary>
+    /// Builds dev package for android from Unity menu.
+    /// </summary>
+    [MenuItem("Build/AndriodDev")]
+    static void BuildForAndroidDev()
+    {
+        RemoveAutoTestScriptingDefineSymbol();
+        // 中文说明：点此菜单时固定按 dev 口味打包，应用名和APK名会自动追加 _dev。
+        forceDevFlavorFromMenu = true;
+        try
+        {
+            Build();
+        }
+        finally
+        {
+            forceDevFlavorFromMenu = false;
+        }
     }
 
     /// <summary>
@@ -124,7 +172,27 @@ class ProjectBuild : Editor
     static void BuildForAndroidAutoTest()
     {
         AddAutoTestScriptingDefineSymbol();
+        forceDevFlavorFromMenu = false;
         Build();
+    }
+
+    /// <summary>
+    /// Builds dev autotest package for android from Unity menu.
+    /// </summary>
+    [MenuItem("Build/AndriodAutoTestDev")]
+    static void BuildForAndroidAutoTestDev()
+    {
+        AddAutoTestScriptingDefineSymbol();
+        // 中文说明：AutoTest 的 dev 菜单，同样会触发 _dev 命名规则。
+        forceDevFlavorFromMenu = true;
+        try
+        {
+            Build();
+        }
+        finally
+        {
+            forceDevFlavorFromMenu = false;
+        }
     }
 
     static void Build()
@@ -133,12 +201,25 @@ class ProjectBuild : Editor
         PlayerSettings.bundleVersion = version;
         //Console.WriteLine("Hello: " + path.LastIndexOf (".apk"));
         PlayerSettings.Android.bundleVersionCode = int.Parse(versionCode);
-        PlayerSettings.productName = productName;
+        string resolvedProductName = productName;
+        bool isDevBuild = string.Equals(buildFlavor, "dev", StringComparison.OrdinalIgnoreCase);
+        if (isDevBuild && !resolvedProductName.EndsWith("_dev", StringComparison.OrdinalIgnoreCase))
+        {
+            // 开发构建统一加 _dev，避免与稳定版安装名冲突。
+            resolvedProductName = resolvedProductName + "_dev";
+        }
+        PlayerSettings.productName = resolvedProductName;
         EditorUserBuildSettings.androidCreateSymbols = AndroidCreateSymbols.Debugging;
 
         if (path.LastIndexOf(".apk") == -1)
         {
             path = @"../bin/localApp.apk";
+        }
+
+        if (isDevBuild && !path.EndsWith("_dev.apk", StringComparison.OrdinalIgnoreCase))
+        {
+            // 开发构建输出文件名也加 _dev，保证 APK 文件维度可区分。
+            path = path.Replace(".apk", "_dev.apk");
         }
 
         /* EditorUserBuildSettings.androidBuildType = AndroidBuildType.Release;

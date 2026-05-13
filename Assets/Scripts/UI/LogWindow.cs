@@ -3,6 +3,8 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
+// 尽早初始化单例，避免其他脚本在 Awake/Start 中写日志时 _instance 仍为空导致静默丢日志。
+[DefaultExecutionOrder(-5000)]
 public class LogWindow : MonoBehaviour
 {
     public TextMeshProUGUI text;

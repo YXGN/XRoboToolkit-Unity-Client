@@ -27,13 +27,14 @@ def usage():
     print(' build_unity_android.py "D:/tools/Unity5.2.3f1/Editor/Unity.exe" "VRLauncher2" "ProjectBuild.BuildForAndroid"')
     print('')
 def process_env():
-    global signtool, zipalign_exe, pdmRepo, version, versionCode, commitid, signKeyID, signType, apk_build_tag, build_revision, branch, tostxt, apk_build_outputs, apk_output_keys, apk_output_sub, final_output
+    global signtool, zipalign_exe, pdmRepo, version, versionCode, commitid, signKeyID, signType, apk_build_tag, build_revision, branch, tostxt, apk_build_outputs, apk_output_keys, apk_output_sub, final_output, buildFlavor, productName
     signtool = os.environ['HOME'] + '/src/github/smartcm/scm-helpers/.apksigner.jar'
     zipalign_exe = os.environ['HOME'] + "/android-sdk-linux/build-tools/29.0.1/zipalign"
 
     pdmRepo = "daily-build"
     final_output = 'build/dist/'
     apk_output_keys = "release,debug"
+    buildFlavor = "stable"
     if os.environ.has_key('pdm_repo'): pdmRepo = os.environ['pdm_repo']
     if os.environ.has_key('versionname'): version = os.environ['versionname']
     if os.environ.has_key('versioncode'): versionCode = os.environ['versioncode']
@@ -47,6 +48,14 @@ def process_env():
     #if os.environ.has_key('APK_BUILD_OUTPUTS'): apk_build_outputs = os.environ['APK_BUILD_OUTPUTS']
     if os.environ.has_key('APK_PUSH_SUBDIR'):apk_output_sub = os.environ['APK_PUSH_SUBDIR']
     if os.environ.has_key('OUTPUT'): final_output = os.environ['OUTPUT']
+    if os.environ.has_key('BUILD_FLAVOR'): buildFlavor = os.environ['BUILD_FLAVOR'].lower()
+    if os.environ.has_key('APK_NAME_SUFFIX') and os.environ['APK_NAME_SUFFIX']:
+        # 支持通过环境变量强制指定后缀，优先级高于 BUILD_FLAVOR 默认规则。
+        if not productName.endswith(os.environ['APK_NAME_SUFFIX']):
+            productName = productName + os.environ['APK_NAME_SUFFIX']
+    elif buildFlavor == "dev" and not productName.endswith('_dev'):
+        # dev 构建默认追加 _dev，保证应用名与APK名一致区分。
+        productName = productName + '_dev'
     if final_output[-1] != '/': final_output = final_output + '/'
     final_output = final_output + methodKey + '/'
 
@@ -106,6 +115,7 @@ def build_UnityAndroid():
                      '-projectPath', projectPath,
                      '-executeMethod', method,
                      'productName=%s' % productName,
+                     'buildFlavor=%s' % buildFlavor,
                      'outputPath=%s' % final_output + 'origin/' + productName + '.apk',
                      'version=%s' % version,
                      'versionCode=%s' % versionCode,
@@ -115,6 +125,7 @@ def build_UnityAndroid():
                      '-projectPath', projectPath,
                      '-executeMethod', method,
                      'productName=%s' % productName,
+                     'buildFlavor=%s' % buildFlavor,
                      'outputPath=%s' % final_output + 'origin/' + productName + '.apk',
                      '-logFile', 'build.log', '-quit', '-upmNoDefaultPackages']
     ret = subprocess.check_call(build_cmd)

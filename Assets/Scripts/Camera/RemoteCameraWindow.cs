@@ -16,6 +16,10 @@ using UnityEngine.UI;
 public class RemoteCameraWindow : MonoBehaviour
 {
     public RawImage RemoteCameraImage;
+    [Header("Follow Setting")]
+    public bool followMainCamera = true;
+    public Transform followTarget;
+
     private TcpListener _tcpListener;
     private TcpClient _client;
     private NetworkStream _stream;
@@ -34,8 +38,11 @@ public class RemoteCameraWindow : MonoBehaviour
 
     private void Awake()
     {
-        transform.position = Camera.main.transform.position;
-        transform.rotation = Camera.main.transform.rotation;
+        // 仅在跟头模式下同步到相机姿态；锚定模式会关闭该开关。
+        if (followMainCamera)
+        {
+            SyncFollowPose();
+        }
     }
 
     public void StartListen(int width, int height, int fps, int bitrate, int port)
@@ -88,11 +95,10 @@ public class RemoteCameraWindow : MonoBehaviour
 
     private void LateUpdate()
     {
-        //Keep the window facing the camera at all times
-        if (Camera.main != null)
+        // 跟头模式：每帧跟随相机；空间锚定模式：保持锚点驱动位置不变。
+        if (followMainCamera)
         {
-            transform.position = Camera.main.transform.position;
-            transform.rotation = Camera.main.transform.rotation;
+            SyncFollowPose();
         }
     }
 
@@ -109,5 +115,31 @@ public class RemoteCameraWindow : MonoBehaviour
                 }
             }
         }
+    }
+
+    public void SetFollowCamera(bool follow)
+    {
+        followMainCamera = follow;
+        if (followMainCamera)
+        {
+            SyncFollowPose();
+        }
+    }
+
+    private void SyncFollowPose()
+    {
+        Transform target = followTarget;
+        if (target == null && Camera.main != null)
+        {
+            target = Camera.main.transform;
+        }
+
+        if (target == null)
+        {
+            return;
+        }
+
+        transform.position = target.position;
+        transform.rotation = target.rotation;
     }
 }

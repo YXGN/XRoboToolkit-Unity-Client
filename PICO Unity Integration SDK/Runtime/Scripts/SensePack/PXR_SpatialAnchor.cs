@@ -76,6 +76,7 @@ namespace Unity.XR.PXR
             }
             else
             {
+                PLog.e(TAG, "CreateSpatialAnchor Fail: " + result.result, false);
                 Destroy(gameObject);
             }
         }
