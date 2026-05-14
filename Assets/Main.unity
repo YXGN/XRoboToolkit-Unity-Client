@@ -7419,7 +7419,7 @@ Camera:
   m_Depth: 0
   m_CullingMask:
     serializedVersion: 2
-    m_Bits: 119
+    m_Bits: 695
   m_RenderingPath: -1
   m_TargetTexture: {fileID: 0}
   m_TargetDisplay: 0
@@ -13716,7 +13716,7 @@ GameObject:
   - component: {fileID: 1215458338}
   - component: {fileID: 1215458337}
   - component: {fileID: 1215458342}
-  m_Layer: 0
+  m_Layer: 9
   m_Name: CanvRE
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -14316,7 +14316,7 @@ Camera:
   m_Depth: 1
   m_CullingMask:
     serializedVersion: 2
-    m_Bits: 229239
+    m_Bits: 228727
   m_RenderingPath: -1
   m_TargetTexture: {fileID: 0}
   m_TargetDisplay: 0
@@ -16448,7 +16448,7 @@ GameObject:
   - component: {fileID: 1438736235}
   - component: {fileID: 1438736234}
   - component: {fileID: 1438736233}
-  m_Layer: 0
+  m_Layer: 8
   m_Name: CanvLE
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -19931,7 +19931,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 2079370988189191209, guid: dd642571209dae844a5e4c97fee0654b, type: 3}
       propertyPath: m_CullingMask.m_Bits
-      value: 229239
+      value: 228727
       objectReference: {fileID: 0}
     - target: {fileID: 2079370988189191214, guid: dd642571209dae844a5e4c97fee0654b, type: 3}
       propertyPath: m_IsActive
@@ -19943,7 +19943,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 2079370989797223673, guid: dd642571209dae844a5e4c97fee0654b, type: 3}
       propertyPath: m_CullingMask.m_Bits
-      value: 119
+      value: 695
       objectReference: {fileID: 0}
     - target: {fileID: 2079370989797223678, guid: dd642571209dae844a5e4c97fee0654b, type: 3}
       propertyPath: m_IsActive
@@ -22595,9 +22595,17 @@ MonoBehaviour:
   anchorSbsRoot: {fileID: 0}
   anchorTransform: {fileID: 909001001001001002}
   autoCreateAnchorSbsFromHeadLocked: 1
+  anchorDistanceFromHead: 1.2
+  anchorSbsCanvasSortingOrder: 320
+  anchorFrameHeight: 0.9
+  anchorFrameLineWidth: 0.01
+  anchorFrameColor: {r: 1, g: 1, b: 1, a: 1}
+  anchorFrameFillColor: {r: 0, g: 0, b: 0, a: 0.15}
   headLockedSbsRawImage: {fileID: 0}
   anchorSbsRawImage: {fileID: 0}
   initialMode: 0
+  anchorSbsBillboardTowardsHead: 1
+  anchorSbsDiagUseUrpUnlitSolid: 1
 --- !u!1 &2071147983
 GameObject:
   m_ObjectHideFlags: 0
@@ -23915,6 +23923,37 @@ MonoBehaviour:
   m_OnValueChanged:
     m_PersistentCalls:
       m_Calls: []
+--- !u!1 &909001001001001001
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 909001001001001002}
+  m_Layer: 0
+  m_Name: AnchorSBSPoint
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &909001001001001002
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 909001001001001001}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 1.5}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &923875025461191072
 GameObject:
   m_ObjectHideFlags: 0
@@ -40715,37 +40754,6 @@ MonoBehaviour:
     m_PersistentCalls:
       m_Calls: []
   m_IsOn: 0
---- !u!1 &909001001001001001
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 909001001001001002}
-  m_Layer: 0
-  m_Name: AnchorSBSPoint
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &909001001001001002
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 909001001001001001}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 1.5}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

@@ -1,6 +1,5 @@
 trackSelection = true
 refreshSearchWindowsInPlayMode = false
-pickerAdvancedUI = false
 fetchPreview = true
 defaultFlags = 0
 keepOpen = true
@@ -9,6 +8,9 @@ onBoardingDoNotAskAgain = true
 showPackageIndexes = false
 showStatusBar = false
 scopes = {
+	"last_search.608DD963" = "h: t=MeshFilter vertices>=1024"
+	"OpenInspectorPreview.608DD963" = "0"
+	"currentGroup.608DD963" = "scene"
 }
 providers = {
 	asset = {
@@ -60,17 +62,20 @@ providers = {
 objectSelectors = {
 }
 recentSearches = [
+	"h: t=MeshFilter vertices>=1024"
+	""
+	"CanvLE"
 ]
 searchItemFavorites = [
 ]
 savedSearchesSortOrder = 0
-showSavedSearchPanel = false
+showSavedSearchPanel = true
 hideTabs = false
 expandedQueries = [
 ]
 queryBuilder = true
 ignoredProperties = "id;name;classname;imagecontentshash"
-helperWidgetCurrentArea = "all"
+helperWidgetCurrentArea = "h:"
 disabledIndexers = ""
 minIndexVariations = 2
 findProviderIndexHelper = true
