@@ -59,7 +59,6 @@ public class ToggleCameraClippingPlane : MonoBehaviour
     private Transform runtimeAnchorTransform;
     private bool anchorSbsPipelineBoundLogged = false;
     private Material anchorSbsLeftHalfMaterial;
-    private float anchorDiagLogTimer = 0f;
     // AnchorSBS 右眼（RE）分眼扩展
     private RawImage anchorSbsRawImageRE;
     private Material anchorSbsRightHalfMaterial;
@@ -145,53 +144,6 @@ public class ToggleCameraClippingPlane : MonoBehaviour
                     anchorSbsRoot.transform.rotation = Quaternion.LookRotation(towardCam, Vector3.up);
                 }
             }
-        }
-
-        // [诊断] 每秒输出一次 AnchorSBS_Root 状态
-        if (currentMode == DisplayMode.AnchorSBS)
-        {
-            anchorDiagLogTimer += Time.deltaTime;
-            if (anchorDiagLogTimer >= 1f)
-            {
-                anchorDiagLogTimer = 0f;
-                string rootPos    = anchorSbsRoot != null ? anchorSbsRoot.transform.position.ToString("F2") : "null";
-                string rootActive = anchorSbsRoot != null ? anchorSbsRoot.activeSelf.ToString() : "null";
-                string matLE      = anchorSbsLeftHalfMaterial  != null ? anchorSbsLeftHalfMaterial.shader.name  : "null";
-                string matRE      = anchorSbsRightHalfMaterial != null ? anchorSbsRightHalfMaterial.shader.name : "null";
-                string anchorPos  = runtimeAnchorTransform != null ? runtimeAnchorTransform.position.ToString("F2") : "destroyed";
-                var host          = runtimeAnchorTransform != null
-                    ? runtimeAnchorTransform.GetComponent<SpatialAnchorRuntimeHost>() : null;
-                string created    = host != null ? host.Created.ToString() : "n/a";
-
-                int leLayer = (setLere != null && setLere.CanvLE != null) ? setLere.CanvLE.layer : -1;
-                int reLayer = (setLere != null && setLere.CanvRE != null) ? setLere.CanvRE.layer : -1;
-
-                string eyeRef = "n/a";
-                string bbDist = "n/a";
-                float faceDot = 0f;
-                if (anchorSbsRoot != null && TryGetStereoEyeMidpoint(out Vector3 eyeMidLog))
-                {
-                    eyeRef = (firstCamera != null && secondCamera != null) ? "StereoMid" : "SingleCam";
-                    bbDist = Vector3.Distance(anchorSbsRoot.transform.position, eyeMidLog).ToString("F2");
-                    Vector3 toEye = eyeMidLog - anchorSbsRoot.transform.position;
-                    if (toEye.sqrMagnitude > 1e-6f)
-                    {
-                        faceDot = Vector3.Dot(anchorSbsRoot.transform.forward, toEye.normalized);
-                    }
-                }
-
-                LogWindow.Info(
-                    $"AnchorSBS [diag] root={rootPos} active={rootActive} " +
-                    $"matLE={matLE} matRE={matRE} " +
-                    $"anchor={anchorPos} created={created} " +
-                    $"eyeRef={eyeRef} dist={bbDist}m faceDot={faceDot:F2} " +
-                    $"billboard={anchorSbsBillboardTowardsHead} urpDiagSolid={anchorSbsDiagUseUrpUnlitSolid}");
-                LogCameraCullingMask(leLayer, reLayer);
-            }
-        }
-        else
-        {
-            anchorDiagLogTimer = 0f;
         }
 
         // 纹理可能在开流后稍晚才可用，这里持续同步，确保两类SBS面板都拿到同一张解码纹理。
