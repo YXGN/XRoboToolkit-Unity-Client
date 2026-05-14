@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.XR;
 using UnityEngine.UI;
 
@@ -40,15 +41,33 @@ public class ToggleCameraClippingPlane : MonoBehaviour
     [SerializeField] private RawImage anchorSbsRawImage;
     [SerializeField] private DisplayMode initialMode = DisplayMode.StereoSplit;
 
+    [Tooltip("为 true 时 AnchorSBS 画布每帧朝向头显（解决 LocateAnchor 旋转与 Quad 正面不一致导致整面被背面剔除看不见）。真正世界锁定时可关掉。")]
+    [SerializeField] private bool anchorSbsBillboardTowardsHead = true;
+
+    [Tooltip("URP 下 MeshRenderer 使用 Built-in CG 的 Custom/SampleRT 常无法参与前向渲染（全透明/不画）；诊断纯色默认走 URP Unlit。接真实图传时再关并改用 SampleRT。")]
+    [SerializeField] private bool anchorSbsDiagUseUrpUnlitSolid = true;
+
+    private static readonly string[] AnchorUrpDiagShaderCandidates =
+    {
+        "Universal Render Pipeline/Unlit",
+        "Universal Render Pipeline/Simple Lit",
+    };
+
     private bool wasButtonPressed = false;
     private bool useValueA = true;
     private DisplayMode currentMode;
     private Transform runtimeAnchorTransform;
     private bool anchorSbsPipelineBoundLogged = false;
     private Material anchorSbsLeftHalfMaterial;
+    private float anchorDiagLogTimer = 0f;
     // AnchorSBS 右眼（RE）分眼扩展
     private RawImage anchorSbsRawImageRE;
     private Material anchorSbsRightHalfMaterial;
+
+    // 与 SetLERE.cs 中私有字段默认值一致（matLE 尚未写入时用于 Anchor 诊断）
+    private const float AnchorRtVisibleRatioDefault = 0.555f;
+    private const float AnchorRtContentRatioDefault = 1.8f;
+    private const float AnchorRtHeightCompressionDefault = 1.333333f;
 
     private void Start()
     {
@@ -101,6 +120,78 @@ public class ToggleCameraClippingPlane : MonoBehaviour
         else
         {
             wasButtonPressed = false;
+        }
+
+        // AnchorSBS_Root：位置跟锚点；旋转默认 billboard 朝头显（PICO LocateAnchor 的旋转常与 Quad 正面不一致 → 背面剔除看不见）。
+        if (currentMode == DisplayMode.AnchorSBS &&
+            anchorSbsRoot != null &&
+            runtimeAnchorTransform != null)
+        {
+            var host = runtimeAnchorTransform.GetComponent<SpatialAnchorRuntimeHost>();
+            if (host != null && host.Created)
+            {
+                anchorSbsRoot.transform.position = runtimeAnchorTransform.position;
+                if (!anchorSbsBillboardTowardsHead)
+                {
+                    anchorSbsRoot.transform.rotation = runtimeAnchorTransform.rotation;
+                }
+            }
+
+            if (anchorSbsBillboardTowardsHead && TryGetStereoEyeMidpoint(out Vector3 eyeMid))
+            {
+                Vector3 towardCam = eyeMid - anchorSbsRoot.transform.position;
+                if (towardCam.sqrMagnitude > 1e-4f)
+                {
+                    anchorSbsRoot.transform.rotation = Quaternion.LookRotation(towardCam, Vector3.up);
+                }
+            }
+        }
+
+        // [诊断] 每秒输出一次 AnchorSBS_Root 状态
+        if (currentMode == DisplayMode.AnchorSBS)
+        {
+            anchorDiagLogTimer += Time.deltaTime;
+            if (anchorDiagLogTimer >= 1f)
+            {
+                anchorDiagLogTimer = 0f;
+                string rootPos    = anchorSbsRoot != null ? anchorSbsRoot.transform.position.ToString("F2") : "null";
+                string rootActive = anchorSbsRoot != null ? anchorSbsRoot.activeSelf.ToString() : "null";
+                string matLE      = anchorSbsLeftHalfMaterial  != null ? anchorSbsLeftHalfMaterial.shader.name  : "null";
+                string matRE      = anchorSbsRightHalfMaterial != null ? anchorSbsRightHalfMaterial.shader.name : "null";
+                string anchorPos  = runtimeAnchorTransform != null ? runtimeAnchorTransform.position.ToString("F2") : "destroyed";
+                var host          = runtimeAnchorTransform != null
+                    ? runtimeAnchorTransform.GetComponent<SpatialAnchorRuntimeHost>() : null;
+                string created    = host != null ? host.Created.ToString() : "n/a";
+
+                int leLayer = (setLere != null && setLere.CanvLE != null) ? setLere.CanvLE.layer : -1;
+                int reLayer = (setLere != null && setLere.CanvRE != null) ? setLere.CanvRE.layer : -1;
+
+                string eyeRef = "n/a";
+                string bbDist = "n/a";
+                float faceDot = 0f;
+                if (anchorSbsRoot != null && TryGetStereoEyeMidpoint(out Vector3 eyeMidLog))
+                {
+                    eyeRef = (firstCamera != null && secondCamera != null) ? "StereoMid" : "SingleCam";
+                    bbDist = Vector3.Distance(anchorSbsRoot.transform.position, eyeMidLog).ToString("F2");
+                    Vector3 toEye = eyeMidLog - anchorSbsRoot.transform.position;
+                    if (toEye.sqrMagnitude > 1e-6f)
+                    {
+                        faceDot = Vector3.Dot(anchorSbsRoot.transform.forward, toEye.normalized);
+                    }
+                }
+
+                LogWindow.Info(
+                    $"AnchorSBS [diag] root={rootPos} active={rootActive} " +
+                    $"matLE={matLE} matRE={matRE} " +
+                    $"anchor={anchorPos} created={created} " +
+                    $"eyeRef={eyeRef} dist={bbDist}m faceDot={faceDot:F2} " +
+                    $"billboard={anchorSbsBillboardTowardsHead} urpDiagSolid={anchorSbsDiagUseUrpUnlitSolid}");
+                LogCameraCullingMask(leLayer, reLayer);
+            }
+        }
+        else
+        {
+            anchorDiagLogTimer = 0f;
         }
 
         // 纹理可能在开流后稍晚才可用，这里持续同步，确保两类SBS面板都拿到同一张解码纹理。
@@ -187,31 +278,18 @@ public class ToggleCameraClippingPlane : MonoBehaviour
         if (headLockedSbsRawImage != null && !ReferenceEquals(headLockedSbsRawImage.texture, tex))
             headLockedSbsRawImage.texture = tex;
 
-        // ── AnchorSBS 左眼 ────────────────────────────────────────────────────
-        if (anchorSbsRawImage != null && !ReferenceEquals(anchorSbsRawImage.texture, tex))
-        {
-            anchorSbsRawImage.texture = tex;
-            anchorSbsRawImage.color   = Color.white;
-        }
-        // Custom/SampleRT 通过 _mainRT 采样纹理，需同步给材质
-        if (anchorSbsLeftHalfMaterial != null)
-            anchorSbsLeftHalfMaterial.SetTexture("_mainRT", tex);
+        // ── AnchorSBS 纹理同步（诊断期间暂时注释，EyeTest Shader 不需要纹理）──
+        // if (anchorSbsRawImage != null && !ReferenceEquals(anchorSbsRawImage.texture, tex))
+        // {
+        //     anchorSbsRawImage.texture = tex;
+        //     anchorSbsRawImage.color   = Color.white;
+        // }
+        // ── 诊断结束后取消注释，恢复真实图传纹理绑定 ──────────────────────
 
-        // ── AnchorSBS 右眼 ────────────────────────────────────────────────────
-        if (anchorSbsRawImageRE != null && !ReferenceEquals(anchorSbsRawImageRE.texture, tex))
-        {
-            anchorSbsRawImageRE.texture = tex;
-            anchorSbsRawImageRE.color   = Color.white;
-        }
-        if (anchorSbsRightHalfMaterial != null)
-            anchorSbsRightHalfMaterial.SetTexture("_mainRT", tex);
-
-        // ── 首次双眼纹理绑定成功日志（避免每帧刷屏）────────────────────────
+        // ── 首次纹理绑定成功日志（避免每帧刷屏）────────────────────────────
         if (currentMode == DisplayMode.AnchorSBS && !anchorSbsPipelineBoundLogged)
         {
-            bool leBound = anchorSbsRawImage   != null && ReferenceEquals(anchorSbsRawImage.texture,   tex);
-            bool reBound = anchorSbsRawImageRE != null && ReferenceEquals(anchorSbsRawImageRE.texture, tex);
-            if (leBound && reBound)
+            if (anchorSbsRawImage != null && ReferenceEquals(anchorSbsRawImage.texture, tex))
             {
                 anchorSbsPipelineBoundLogged = true;
                 LogAnchorSbsPipelineStatus("texture-bound");
@@ -265,10 +343,10 @@ public class ToggleCameraClippingPlane : MonoBehaviour
     }
 
     /// <summary>
-    /// 在锚点处创建双目分眼画布（左眼/右眼各一个 WorldSpace Canvas）。
-    /// 左眼画布挂载与 SetLERE.CanvLE 相同图层，右眼画布与 CanvRE 相同图层；
-    /// 分别使用 Custom/SampleRT (_isLE=1/0) 采样 SBS 纹理左/右半幅，
-    /// 实现空间锚定画布上的立体分眼图传显示。
+    /// 在锚点处创建两个 3D Quad（MeshRenderer），与 SetLERE 的 CanvLE/CanvRE 完全同构：
+    /// - LE Quad：与 CanvLE 同图层，Camera Culling Mask 只允许左眼相机看到
+    /// - RE Quad：与 CanvRE 同图层，Camera Culling Mask 只允许右眼相机看到
+    /// [诊断模式] Custom/SampleRT + 1×1 纯色 _mainRT（左眼蓝 / 右眼红），参数与 SetLERE 一致。
     /// </summary>
     private void CreateAnchorPlaceholderFrame(Transform parentAnchor)
     {
@@ -277,138 +355,231 @@ public class ToggleCameraClippingPlane : MonoBehaviour
         const float frameScale = 2f;
         float width  = anchorFrameHeight * (1080f / 720f) * frameScale;
         float height = anchorFrameHeight * frameScale;
-        Vector2 canvasSizeDelta = new Vector2(width * 1000f, height * 1000f);
 
-        // 从 SetLERE 的现有画布继承左右眼图层，保证与 StereoSplit 模式图层配置完全一致
+        // 从 SetLERE 继承图层，确保与正在工作的 StereoSplit 图层隔离完全一致
         int leLayer = (setLere != null && setLere.CanvLE != null) ? setLere.CanvLE.layer : 0;
         int reLayer = (setLere != null && setLere.CanvRE != null) ? setLere.CanvRE.layer : 0;
+        LogWindow.Info($"AnchorSBS: 继承图层 leLayer={leLayer}({LayerMask.LayerToName(leLayer)}), " +
+                       $"reLayer={reLayer}({LayerMask.LayerToName(reLayer)})");
 
-        // 顶层空容器（不含 Canvas），挂在锚点下，统一控制双目画布的显隐
+        // [诊断日志] 打印摄像机 Culling Mask，确认 leLayer/reLayer 是否被渲染
+        LogCameraCullingMask(leLayer, reLayer);
+
+        // 父容器（纯空 GameObject，SetActive 统一控制两个 Quad 显隐）
+        // 注意：不挂在 parentAnchor 的层级下，而是独立放在场景根，
+        // 由 Update() 主动跟随锚点位置。
+        // 原因：SpatialAnchorRuntimeHost 锚点创建失败时会 Destroy(gameObject)，
+        // 若 AnchorSBS_Root 是其子节点，会被一并销毁导致画布消失。
         anchorSbsRoot = new GameObject("AnchorSBS_Root");
-        anchorSbsRoot.transform.SetParent(parentAnchor, false);
-        anchorSbsRoot.transform.localPosition = Vector3.zero;
-        anchorSbsRoot.transform.localRotation = Quaternion.identity;
-        anchorSbsRoot.transform.localScale    = Vector3.one;
+        anchorSbsRoot.transform.SetPositionAndRotation(parentAnchor.position, parentAnchor.rotation);
+        anchorSbsRoot.transform.localScale = Vector3.one;
 
-        // ── 左眼 Canvas（仅左眼摄像机图层可见）──────────────────────────────
-        GameObject leCanvasObj = CreateEyeCanvas("AnchorSBS_Canvas_LE", anchorSbsRoot.transform, leLayer, canvasSizeDelta);
-        anchorSbsRawImage       = CreateEyeRawImage("AnchorSBS_RawImage_LE", leCanvasObj.transform, canvasSizeDelta, leLayer);
-        anchorSbsRawImage.color = anchorFrameFillColor;
+        // [诊断] LE Quad → 蓝色，RE Quad → 红色；微小 local X 偏移减轻同层 Z-fighting
+        const float diagHalfSeparation = 0.012f;
+        anchorSbsLeftHalfMaterial  = CreateAnchorDiagQuad(
+            "AnchorSBS_Quad_LE", anchorSbsRoot.transform, leLayer,
+            new Vector3(width, height, 1f), Color.blue, isLE: true,
+            new Vector3(-diagHalfSeparation, 0f, 0f));
 
-        // ── 右眼 Canvas（仅右眼摄像机图层可见）──────────────────────────────
-        GameObject reCanvasObj  = CreateEyeCanvas("AnchorSBS_Canvas_RE", anchorSbsRoot.transform, reLayer, canvasSizeDelta);
-        anchorSbsRawImageRE       = CreateEyeRawImage("AnchorSBS_RawImage_RE", reCanvasObj.transform, canvasSizeDelta, reLayer);
-        anchorSbsRawImageRE.color = anchorFrameFillColor;
+        anchorSbsRightHalfMaterial = CreateAnchorDiagQuad(
+            "AnchorSBS_Quad_RE", anchorSbsRoot.transform, reLayer,
+            new Vector3(width, height, 1f), Color.red, isLE: false,
+            new Vector3(diagHalfSeparation, 0f, 0f));
 
-        // 为双目 RawImage 建立 Custom/SampleRT 材质，_isLE 决定采样左/右半幅
-        SetupAnchorSbsMaterials(anchorSbsRawImage, anchorSbsRawImageRE);
-
-        // 各自画布上绘制边框线（保证双目均能看见边框）
-        CreateFrameEdgesOnCanvas(leCanvasObj.transform, canvasSizeDelta, leLayer);
-        CreateFrameEdgesOnCanvas(reCanvasObj.transform, canvasSizeDelta, reLayer);
+        // 不再使用 RawImage
+        anchorSbsRawImage   = null;
+        anchorSbsRawImageRE = null;
 
         LogWindow.Info(
-            $"AnchorSBS: 已创建双目分眼锚定画布 leLayer={leLayer}, reLayer={reLayer}, " +
-            $"size=({width:F3}m,{height:F3}m) scale=x{frameScale:F1}");
+            $"AnchorSBS [诊断]: 已创建 3D Quad 双目画布（左眼=蓝 / 右眼=红）" +
+            $" size=({width:F3}m,{height:F3}m)");
+        LogAnchorSbsDiagStepSummary(leLayer, reLayer);
     }
 
-    /// <summary>创建单眼用 WorldSpace Canvas 节点。</summary>
-    private GameObject CreateEyeCanvas(string name, Transform parent, int layer, Vector2 sizeDelta)
+    /// <summary>分步调试：创建完成后在 LogWindow 中打印核对清单。</summary>
+    private void LogAnchorSbsDiagStepSummary(int leLayer, int reLayer)
     {
-        var obj = new GameObject(name, typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler));
-        obj.layer = layer;
-        obj.transform.SetParent(parent, false);
-        obj.transform.localPosition = Vector3.zero;
-        obj.transform.localRotation = Quaternion.identity;
-        obj.transform.localScale    = Vector3.one * 0.001f;
-
-        var rt = obj.GetComponent<RectTransform>();
-        rt.sizeDelta = sizeDelta;
-
-        var canvas = obj.GetComponent<Canvas>();
-        canvas.renderMode   = RenderMode.WorldSpace;
-        canvas.worldCamera  = Camera.main;
-        canvas.sortingOrder = anchorSbsCanvasSortingOrder;
-
-        var scaler = obj.GetComponent<CanvasScaler>();
-        scaler.dynamicPixelsPerUnit = 10f;
-
-        return obj;
+        bool sameLayer = leLayer == reLayer;
+        LogWindow.Info(
+            "AnchorSBS [debug 步骤]\n" +
+            "1) 切到 AnchorSBS 后应看到蓝/红；若全黑先看 SampleRT 的 _visibleRatio/_contentRatio 是否与 SetLERE 一致。\n" +
+            "2) 看 Log 中 CullMask：LeftCamera(firstCam) 须包含 leLayer，RightCamera(secondCam) 须包含 reLayer。\n" +
+            "3) 若 leLayer==reLayer，两眼都会画两片 mesh，已做微小 X 分离减轻 Z-fight；生产环境建议左右眼专用 Layer。\n" +
+            "4) 若 CullMask 正常仍看不见：多为 LocateAnchor 的旋转使 Quad 背向头显（背面剔除）；默认已开启 anchorSbsBillboardTowardsHead 每帧朝头显。\n" +
+            "5) 项目为 URP 时 Mesh 上勿用 Built-in CG 的 Custom/SampleRT 做诊断；默认 anchorSbsDiagUseUrpUnlitSolid 走 URP Unlit 纯色。\n" +
+            $"当前 leLayer={leLayer} reLayer={reLayer} sameLayer={sameLayer}");
     }
 
-    /// <summary>创建单眼用 RawImage 节点，居中填满父 Canvas。</summary>
-    private RawImage CreateEyeRawImage(string name, Transform parent, Vector2 sizeDelta, int layer)
+    /// <summary>与 SetLERE 一致：SetInt(_isLE) + 比例参数（避免 SampleRT UV 裁剪成全透明）。</summary>
+    private void ApplyAnchorSampleRtStereoParams(Material mat, bool isLE)
     {
-        var obj = new GameObject(name, typeof(RectTransform), typeof(RawImage));
-        obj.layer = layer;
-        obj.transform.SetParent(parent, false);
+        if (mat == null) return;
+        mat.SetInt("_isLE", isLE ? 1 : 0);
+        float vr = AnchorRtVisibleRatioDefault;
+        float cr = AnchorRtContentRatioDefault;
+        float hcf = AnchorRtHeightCompressionDefault;
+        if (setLere != null && setLere.matLE != null)
+        {
+            vr = setLere.matLE.GetFloat("_visibleRatio");
+            cr = setLere.matLE.GetFloat("_contentRatio");
+            hcf = setLere.matLE.GetFloat("_heightCompressionFactor");
+        }
 
-        var rt = obj.GetComponent<RectTransform>();
-        rt.anchorMin = new Vector2(0.5f, 0.5f);
-        rt.anchorMax = new Vector2(0.5f, 0.5f);
-        rt.pivot     = new Vector2(0.5f, 0.5f);
-        rt.sizeDelta = sizeDelta;
+        mat.SetFloat("_visibleRatio", vr);
+        mat.SetFloat("_contentRatio", cr);
+        mat.SetFloat("_heightCompressionFactor", hcf);
+    }
 
-        return obj.GetComponent<RawImage>();
+    private bool TryGetStereoEyeMidpoint(out Vector3 midpoint)
+    {
+        if (firstCamera != null && secondCamera != null)
+        {
+            midpoint = (firstCamera.transform.position + secondCamera.transform.position) * 0.5f;
+            return true;
+        }
+
+        var cam = GetAnchorBillboardCamera();
+        if (cam != null)
+        {
+            midpoint = cam.transform.position;
+            return true;
+        }
+
+        midpoint = default;
+        return false;
+    }
+
+    /// <summary>URP 下用引擎自带 Unlit/SimpleLit 做纯色诊断（Mesh 上可渲染）；SampleRT 为 Built-in CG，在 URP MeshRenderer 上常完全不显示。</summary>
+    private bool TryCreateAnchorUrpUnlitSolidMaterial(string matName, Color diagColor, out Material mat)
+    {
+        mat = null;
+        if (!anchorSbsDiagUseUrpUnlitSolid)
+        {
+            return false;
+        }
+
+        foreach (var shaderPath in AnchorUrpDiagShaderCandidates)
+        {
+            var s = Shader.Find(shaderPath);
+            if (s == null)
+            {
+                continue;
+            }
+
+            mat = new Material(s) { name = matName };
+            if (mat.HasProperty("_BaseColor"))
+            {
+                mat.SetColor("_BaseColor", diagColor);
+            }
+            else if (mat.HasProperty("_Color"))
+            {
+                mat.SetColor("_Color", diagColor);
+            }
+
+            if (mat.HasProperty("_Cull"))
+            {
+                mat.SetFloat("_Cull", 0f);
+            }
+
+            LogWindow.Info($"AnchorSBS: 诊断材质使用 URP shader={shaderPath}");
+            return true;
+        }
+
+        var spriteShader = Shader.Find("Sprites/Default");
+        if (spriteShader != null)
+        {
+            mat = new Material(spriteShader) { name = matName };
+            if (mat.HasProperty("_Color"))
+            {
+                mat.SetColor("_Color", diagColor);
+            }
+            else
+            {
+                mat.color = diagColor;
+            }
+
+            LogWindow.Warn("AnchorSBS: 未找到 URP Unlit，诊断材质回退 Sprites/Default（请确认 Package 含 URP）。");
+            return true;
+        }
+
+        LogWindow.Error(
+            "AnchorSBS: 未找到 URP Unlit/SimpleLit 且 Sprites/Default 失败，将回退 Custom/SampleRT；" +
+            "在 URP 下 Mesh 可能仍不可见。");
+        return false;
     }
 
     /// <summary>
-    /// 为 AnchorSBS 双目 RawImage 建立运行时材质。
-    /// 优先使用 Custom/SampleRT（与 SetLERE 完全一致的分眼采样逻辑），
-    /// Shader 缺失时降级为简单 uvRect 裁切。
+    /// 创建一个 3D Quad（MeshRenderer），挂指定图层。
+    /// 诊断：URP 下默认用 URP Unlit 纯色（与 MeshRenderer 兼容）；否则回退 Custom/SampleRT + 1×1 纹理。
     /// </summary>
-    private void SetupAnchorSbsMaterials(RawImage leImage, RawImage reImage)
+    private Material CreateAnchorDiagQuad(string name, Transform parent, int layer,
+                                           Vector3 scale, Color diagColor, bool isLE, Vector3 localOffset)
     {
-        if (leImage == null || reImage == null) return;
+        GameObject quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        quad.name  = name;
+        quad.layer = layer;
+        quad.transform.SetParent(parent, false);
+        quad.transform.localPosition = localOffset;
+        quad.transform.localRotation = Quaternion.identity;
+        quad.transform.localScale    = scale;
 
-        Shader sampleShader = Shader.Find("Custom/SampleRT");
-        if (sampleShader != null)
+        Destroy(quad.GetComponent<MeshCollider>());
+
+        var meshRenderer = quad.GetComponent<MeshRenderer>();
+        meshRenderer.shadowCastingMode = ShadowCastingMode.Off;
+        meshRenderer.receiveShadows = false;
+        meshRenderer.lightProbeUsage = LightProbeUsage.Off;
+
+        if (TryCreateAnchorUrpUnlitSolidMaterial($"{name}_DiagMat", diagColor, out Material urpMat))
         {
-            // 左眼：_isLE=1，采样 SBS 纹理左半幅
-            anchorSbsLeftHalfMaterial = new Material(sampleShader) { name = "AnchorSBS_LE_RuntimeMat" };
-            anchorSbsLeftHalfMaterial.SetInt("_isLE", 1);
-            CopyAnchorSbsShaderParams(anchorSbsLeftHalfMaterial, setLere != null ? setLere.matLE : null);
-            leImage.material = anchorSbsLeftHalfMaterial;
-
-            // 右眼：_isLE=0，采样 SBS 纹理右半幅
-            anchorSbsRightHalfMaterial = new Material(sampleShader) { name = "AnchorSBS_RE_RuntimeMat" };
-            anchorSbsRightHalfMaterial.SetInt("_isLE", 0);
-            CopyAnchorSbsShaderParams(anchorSbsRightHalfMaterial, setLere != null ? setLere.matRE : null);
-            reImage.material = anchorSbsRightHalfMaterial;
-
-            LogWindow.Info("AnchorSBS: 已创建 Custom/SampleRT 双目运行时材质 (LE _isLE=1 / RE _isLE=0)");
+            meshRenderer.material = urpMat;
+            LogWindow.Info(
+                $"AnchorSBS [诊断]: {name} path=URP-Solid shader={ShaderName(urpMat)} color={diagColor} " +
+                $"layer={layer}({LayerMask.LayerToName(layer)})");
+            return urpMat;
         }
-        else
+
+        Shader srtShader = (setLere != null && setLere.matLE != null)
+            ? setLere.matLE.shader
+            : Shader.Find("Custom/SampleRT");
+
+        if (srtShader == null)
         {
-            // 降级：uvRect 直接裁切左/右半幅
-            leImage.uvRect = new Rect(0f,   0f, 0.5f, 1f);
-            reImage.uvRect = new Rect(0.5f, 0f, 0.5f, 1f);
-            LogWindow.Error("AnchorSBS: Custom/SampleRT Shader 未找到，已降级为 uvRect 模式（LE=左0~0.5，RE=右0.5~1）");
+            LogWindow.Error($"AnchorSBS: Custom/SampleRT Shader 未找到，{name} 将使用默认材质");
+            return null;
         }
+
+        var diagTex = new Texture2D(1, 1, TextureFormat.RGBA32, false);
+        diagTex.wrapMode = TextureWrapMode.Clamp;
+        diagTex.filterMode = FilterMode.Point;
+        diagTex.SetPixel(0, 0, diagColor);
+        diagTex.Apply();
+
+        var mat = new Material(srtShader) { name = $"{name}_DiagMat" };
+        ApplyAnchorSampleRtStereoParams(mat, isLE);
+        mat.SetTexture("_mainRT", diagTex);
+
+        meshRenderer.material = mat;
+
+        var mpb = new MaterialPropertyBlock();
+        mpb.SetTexture("_mainRT", diagTex);
+        mpb.SetInt("_isLE", isLE ? 1 : 0);
+        mpb.SetFloat("_visibleRatio", mat.GetFloat("_visibleRatio"));
+        mpb.SetFloat("_contentRatio", mat.GetFloat("_contentRatio"));
+        mpb.SetFloat("_heightCompressionFactor", mat.GetFloat("_heightCompressionFactor"));
+        meshRenderer.SetPropertyBlock(mpb);
+
+        LogWindow.Info(
+            $"AnchorSBS [诊断]: {name} path=SampleRT fallback shader=Custom/SampleRT _mainRT={diagTex.width}x{diagTex.height}" +
+            $" color={diagColor} _isLE={(isLE ? 1 : 0)} vr={mat.GetFloat("_visibleRatio"):F3} cr={mat.GetFloat("_contentRatio"):F3} " +
+            $"hcf={mat.GetFloat("_heightCompressionFactor"):F3} layer={layer}({LayerMask.LayerToName(layer)})");
+        return mat;
     }
 
-    /// <summary>从 SetLERE 现有材质拷贝 SBS shader 参数到目标材质；src 为 null 时使用默认值。</summary>
-    private void CopyAnchorSbsShaderParams(Material dst, Material src)
-    {
-        float visibleRatio    = 0.555f;
-        float contentRatio    = 1.8f;
-        float heightCompress  = 1.333333f;
-
-        if (src != null)
-        {
-            try
-            {
-                visibleRatio   = src.GetFloat("_visibleRatio");
-                contentRatio   = src.GetFloat("_contentRatio");
-                heightCompress = src.GetFloat("_heightCompressionFactor");
-            }
-            catch { /* 材质属性缺失时保持默认值 */ }
-        }
-
-        dst.SetFloat("_visibleRatio",          visibleRatio);
-        dst.SetFloat("_contentRatio",           contentRatio);
-        dst.SetFloat("_heightCompressionFactor", heightCompress);
-    }
+    /// <summary>
+    /// [诊断期间已废弃] 材质设置现在内嵌在 CreateAnchorDiagQuad 中，此方法暂留存根。
+    /// </summary>
+    private void SetupAnchorSbsMaterials(RawImage leImage, RawImage reImage) { }
 
     /// <summary>在指定 Canvas 下创建四条边框线，图层与 Canvas 一致。</summary>
     private void CreateFrameEdgesOnCanvas(Transform canvasTransform, Vector2 sizeDelta, int layer)
@@ -472,22 +643,60 @@ public class ToggleCameraClippingPlane : MonoBehaviour
     private void LogAnchorSbsPipelineStatus(string stage)
     {
         string decoderTex = (remoteCameraWindowComp != null && remoteCameraWindowComp.Texture != null)
-            ? $”{remoteCameraWindowComp.Texture.width}x{remoteCameraWindowComp.Texture.height}” : “null”;
-        string leTex = (anchorSbsRawImage != null && anchorSbsRawImage.texture != null)
-            ? $”{anchorSbsRawImage.texture.width}x{anchorSbsRawImage.texture.height}” : “null”;
-        string reTex = (anchorSbsRawImageRE != null && anchorSbsRawImageRE.texture != null)
-            ? $”{anchorSbsRawImageRE.texture.width}x{anchorSbsRawImageRE.texture.height}” : “null”;
-        bool leRef = anchorSbsRawImage   != null && remoteCameraWindowComp?.Texture != null
-                     && ReferenceEquals(anchorSbsRawImage.texture,   remoteCameraWindowComp.Texture);
-        bool reRef = anchorSbsRawImageRE != null && remoteCameraWindowComp?.Texture != null
-                     && ReferenceEquals(anchorSbsRawImageRE.texture, remoteCameraWindowComp.Texture);
+            ? $"{remoteCameraWindowComp.Texture.width}x{remoteCameraWindowComp.Texture.height}" : "null";
+        string rawTex = (anchorSbsRawImage != null && anchorSbsRawImage.texture != null)
+            ? $"{anchorSbsRawImage.texture.width}x{anchorSbsRawImage.texture.height}" : "null";
+        bool texRef = anchorSbsRawImage != null && remoteCameraWindowComp?.Texture != null
+                      && ReferenceEquals(anchorSbsRawImage.texture, remoteCameraWindowComp.Texture);
 
         LogWindow.Info(
-            $”AnchorSBS pipeline[{stage}]: decoderTex={decoderTex}, “ +
-            $”LE={leTex}(ref={leRef}, mat={ShaderName(anchorSbsLeftHalfMaterial)}), “ +
-            $”RE={reTex}(ref={reRef}, mat={ShaderName(anchorSbsRightHalfMaterial)}), “ +
-            $”rootActive={(anchorSbsRoot != null && anchorSbsRoot.activeSelf)}”);
+            $"AnchorSBS pipeline[{stage}]: decoderTex={decoderTex}, " +
+            $"rawTex={rawTex}(ref={texRef}), " +
+            $"mat={ShaderName(anchorSbsLeftHalfMaterial)}, " +
+            $"rootActive={(anchorSbsRoot != null && anchorSbsRoot.activeSelf)}");
     }
 
-    private static string ShaderName(Material m) => m != null ? m.shader.name : “null”;
+    private static string ShaderName(Material m) => m != null ? m.shader.name : "null";
+
+    private Camera GetAnchorBillboardCamera()
+    {
+        if (Camera.main != null && Camera.main.isActiveAndEnabled)
+        {
+            return Camera.main;
+        }
+
+        if (firstCamera != null && firstCamera.isActiveAndEnabled)
+        {
+            return firstCamera;
+        }
+
+        if (secondCamera != null && secondCamera.isActiveAndEnabled)
+        {
+            return secondCamera;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 打印所有已知摄像机的 Culling Mask，确认 leLayer/reLayer 是否被各摄像机渲染。
+    /// 日志格式：[相机名] mask=0xXXXXXXXX  leLayerBit=0or1  reLayerBit=0or1
+    /// bit=1 表示该层在该摄像机的 Culling Mask 中（会被渲染）。
+    /// </summary>
+    private void LogCameraCullingMask(int leLayer, int reLayer)
+    {
+        void LogCam(Camera cam, string label)
+        {
+            if (cam == null) return;
+            int mask  = cam.cullingMask;
+            int leBit = leLayer >= 0 ? (mask >> leLayer) & 1 : -1;
+            int reBit = reLayer >= 0 ? (mask >> reLayer) & 1 : -1;
+            LogWindow.Info(
+                $"CullMask [{label}] mask=0x{mask:X8}  " +
+                $"leLayer({leLayer})={leBit}  reLayer({reLayer})={reBit}");
+        }
+        LogCam(Camera.main,   "main");
+        LogCam(firstCamera,   "firstCam");
+        LogCam(secondCamera,  "secondCam");
+    }
 }

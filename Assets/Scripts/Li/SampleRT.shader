@@ -86,6 +86,8 @@ Shader "Custom/SampleRT"
     Properties
     {
         _MainTex ("Texture", 2D) = "white" {}
+        // 声明后材质/运行时 SetTexture 与打包 strip 更可靠（AnchorSBS 等动态 _mainRT）
+        _mainRT ("Main RT", 2D) = "white" {}
         _visibleRatio ("Visible Ratio", Range(0.0, 2.0)) = 1.0
         _contentRatio ("Content Ratio", Range(0.0, 2.0)) = 0.555
         _heightCompressionFactor ("Height Compression", Range(0.0, 2.0)) = 1.25
