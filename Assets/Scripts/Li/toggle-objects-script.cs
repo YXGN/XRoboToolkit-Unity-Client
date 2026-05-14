@@ -31,7 +31,7 @@ public class ToggleCameraClippingPlane : MonoBehaviour
     [SerializeField] private GameObject anchorSbsRoot;
     [SerializeField] private Transform anchorTransform;
     [SerializeField] private bool autoCreateAnchorSbsFromHeadLocked = true;
-    [SerializeField] private float anchorDistanceFromHead = 1.2f;
+    [SerializeField] private float anchorDistanceFromHead = 2.5f;
     [SerializeField] private int anchorSbsCanvasSortingOrder = 320;
     [SerializeField] private float anchorFrameHeight = 0.9f;
     [SerializeField] private float anchorFrameLineWidth = 0.01f;
@@ -166,14 +166,13 @@ public class ToggleCameraClippingPlane : MonoBehaviour
 
     private void ApplyDisplayMode(DisplayMode mode, bool forceApply)
     {
-        LogWindow.Info($"显示模式切换请求: {mode} (forceApply={forceApply})");
-
         bool useStereoSplit = mode == DisplayMode.StereoSplit;
         bool useHeadLockedSbs = mode == DisplayMode.HeadLockedSBS;
         bool useAnchorSbs = mode == DisplayMode.AnchorSBS;
 
-        // 若没有配置锚定SBS对象，则自动回退到跟头SBS，避免切换后无画面。
-        if (useAnchorSbs && anchorSbsRoot == null)
+        // 每次切换到 AnchorSBS 都基于当前头部位置重新创建锚点与画布。
+        // TryCreateAnchorSbsRoot 内部会先销毁旧对象再重建，无需在外部判断 null。
+        if (useAnchorSbs)
         {
             TryCreateAnchorSbsRoot(true);
         }
@@ -201,15 +200,7 @@ public class ToggleCameraClippingPlane : MonoBehaviour
             anchorSbsRoot.SetActive(useAnchorSbs);
         }
 
-        if (useAnchorSbs)
-        {
-            anchorSbsPipelineBoundLogged = false;
-            LogAnchorSbsPipelineStatus("mode-enter");
-        }
-        else
-        {
-            anchorSbsPipelineBoundLogged = false;
-        }
+        anchorSbsPipelineBoundLogged = false;
 
         // 跟头SBS时打开跟随；空间锚定和立体分眼时关闭跟随。
         if (remoteCameraWindowComp != null)
@@ -226,7 +217,6 @@ public class ToggleCameraClippingPlane : MonoBehaviour
         }
 
         SyncSbsTexture();
-        LogWindow.Info($"显示模式已应用: {currentMode} (StereoSplit={useStereoSplit}, HeadLockedSBS={useHeadLockedSbs}, AnchorSBS={useAnchorSbs})");
     }
 
     private void SyncSbsTexture()
@@ -245,15 +235,8 @@ public class ToggleCameraClippingPlane : MonoBehaviour
             if (!ReferenceEquals(anchorSbsLastSyncedTexture, tex))
             {
                 anchorSbsLastSyncedTexture  = tex;
-                anchorSbsRawImage.texture   = tex;   // LE：uvRect=(0,  0,0.5,1) 自动裁左半
-                anchorSbsRawImageRE.texture = tex;   // RE：uvRect=(0.5,0,0.5,1) 自动裁右半
-                if (!anchorSbsPipelineBoundLogged)
-                {
-                    anchorSbsPipelineBoundLogged = true;
-                    LogWindow.Info(
-                        $"AnchorSBS: 纹理首次绑定 {tex.width}x{tex.height} " +
-                        $"LE.uvRect={anchorSbsRawImage.uvRect} RE.uvRect={anchorSbsRawImageRE.uvRect}");
-                }
+                anchorSbsRawImage.texture   = tex;
+                anchorSbsRawImageRE.texture = tex;
             }
         }
     }
@@ -325,8 +308,6 @@ public class ToggleCameraClippingPlane : MonoBehaviour
 
         int leLayer = (setLere != null && setLere.CanvLE != null) ? setLere.CanvLE.layer : 0;
         int reLayer = (setLere != null && setLere.CanvRE != null) ? setLere.CanvRE.layer : 0;
-        LogWindow.Info($"AnchorSBS: 继承图层 leLayer={leLayer}({LayerMask.LayerToName(leLayer)}), " +
-                       $"reLayer={reLayer}({LayerMask.LayerToName(reLayer)})");
 
         // 父容器：独立场景根节点，Update() 跟随锚点位置
         anchorSbsRoot = new GameObject("AnchorSBS_Root");
@@ -352,11 +333,6 @@ public class ToggleCameraClippingPlane : MonoBehaviour
         anchorSbsRightHalfMaterial = null;
         anchorSbsLastSyncedTexture = null;
 
-        LogWindow.Info(
-            $"AnchorSBS: 双 Canvas+RawImage 创建完成 size=({width:F3}m,{height:F3}m) " +
-            $"leLayer={leLayer} reLayer={reLayer} " +
-            $"LE={(anchorSbsRawImage != null ? "OK" : "NULL")} " +
-            $"RE={(anchorSbsRawImageRE != null ? "OK" : "NULL")}");
     }
 
     /// <summary>
@@ -399,9 +375,6 @@ public class ToggleCameraClippingPlane : MonoBehaviour
         rawImage.uvRect   = uvRect;
         rawImage.color    = Color.white;
 
-        LogWindow.Info(
-            $"AnchorSBS: {objName} WorldSpace Canvas size=({worldWidth:F3},{worldHeight:F3})m " +
-            $"layer={layer}({LayerMask.LayerToName(layer)}) uvRect={uvRect}");
         return rawImage;
     }
 
@@ -635,34 +608,12 @@ public class ToggleCameraClippingPlane : MonoBehaviour
         GameObject runtimeAnchorObj = new GameObject("AnchorSBS_RuntimePoint");
         runtimeAnchorTransform = runtimeAnchorObj.transform;
         runtimeAnchorTransform.SetPositionAndRotation(anchorPos, anchorRot);
-        LogWindow.Info(
-            $"AnchorSBS 开始创建锚点：pos={anchorPos.ToString("F3")}, rot={anchorRot.eulerAngles.ToString("F1")}");
-        LogWindow.Info("AnchorSBS: runtime anchor host created");
+        LogWindow.Info($"AnchorSBS: 锚点 pos={anchorPos.ToString("F3")}");
         // 使用 Assembly-CSharp 内的宿主脚本写 LogWindow；SDK 内 PXR_SpatialAnchor 无法引用 LogWindow。
         runtimeAnchorObj.AddComponent<SpatialAnchorRuntimeHost>();
 
         anchorTransform = runtimeAnchorTransform;
         return true;
-    }
-
-    /// <summary>
-    /// 记录 AnchorSBS 双目图像显示 pipeline 关键链路状态：
-    /// MediaDecoder → RemoteCameraWindow.Texture → LE/RE RawImage.texture → LE/RE Material._mainRT
-    /// </summary>
-    private void LogAnchorSbsPipelineStatus(string stage)
-    {
-        string decoderTex = (remoteCameraWindowComp != null && remoteCameraWindowComp.Texture != null)
-            ? $"{remoteCameraWindowComp.Texture.width}x{remoteCameraWindowComp.Texture.height}" : "null";
-        string rawTex = (anchorSbsRawImage != null && anchorSbsRawImage.texture != null)
-            ? $"{anchorSbsRawImage.texture.width}x{anchorSbsRawImage.texture.height}" : "null";
-        bool texRef = anchorSbsRawImage != null && remoteCameraWindowComp?.Texture != null
-                      && ReferenceEquals(anchorSbsRawImage.texture, remoteCameraWindowComp.Texture);
-
-        LogWindow.Info(
-            $"AnchorSBS pipeline[{stage}]: decoderTex={decoderTex}, " +
-            $"rawTex={rawTex}(ref={texRef}), " +
-            $"mat={ShaderName(anchorSbsLeftHalfMaterial)}, " +
-            $"rootActive={(anchorSbsRoot != null && anchorSbsRoot.activeSelf)}");
     }
 
     private static string ShaderName(Material m) => m != null ? m.shader.name : "null";
