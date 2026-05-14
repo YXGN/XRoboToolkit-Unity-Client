@@ -314,15 +314,15 @@ public class ToggleCameraClippingPlane : MonoBehaviour
         anchorSbsRoot.transform.SetPositionAndRotation(parentAnchor.position, parentAnchor.rotation);
         anchorSbsRoot.transform.localScale = Vector3.one;
 
-        // LE: SBS 左半幅
+        // LE: SBS 左半幅，width=-0.5 补偿 Billboard LookRotation 导致的 Canvas 本地 X 轴镜像
         anchorSbsRawImage = CreateAnchorWorldSpaceRawImage(
             "AnchorSBS_LE", anchorSbsRoot.transform, leLayer, width, height,
-            new Rect(0f, 0f, 0.5f, 1f));
+            new Rect(0.5f, 0f, -0.5f, 1f));
 
         // RE: SBS 右半幅
         anchorSbsRawImageRE = CreateAnchorWorldSpaceRawImage(
             "AnchorSBS_RE", anchorSbsRoot.transform, reLayer, width, height,
-            new Rect(0.5f, 0f, 0.5f, 1f));
+            new Rect(1f, 0f, -0.5f, 1f));
 
         // 清空 MeshRenderer/MPB 路径字段（本路径不再使用）
         anchorSbsLeRenderer        = null;

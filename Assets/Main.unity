@@ -22595,7 +22595,7 @@ MonoBehaviour:
   anchorSbsRoot: {fileID: 0}
   anchorTransform: {fileID: 909001001001001002}
   autoCreateAnchorSbsFromHeadLocked: 1
-  anchorDistanceFromHead: 1.2
+  anchorDistanceFromHead: 2.5
   anchorSbsCanvasSortingOrder: 320
   anchorFrameHeight: 0.9
   anchorFrameLineWidth: 0.01
