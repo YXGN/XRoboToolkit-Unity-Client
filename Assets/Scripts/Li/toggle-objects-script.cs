@@ -62,6 +62,14 @@ public class ToggleCameraClippingPlane : MonoBehaviour
     // AnchorSBS 右眼（RE）分眼扩展
     private RawImage anchorSbsRawImageRE;
     private Material anchorSbsRightHalfMaterial;
+    // AnchorSBS 正式图传：每帧通过 MPB 更新纹理，绕过 non-Properties-block 纹理丢失问题
+    private MeshRenderer anchorSbsLeRenderer;
+    private MeshRenderer anchorSbsReRenderer;
+    private MaterialPropertyBlock anchorSbsLeMpb;
+    private MaterialPropertyBlock anchorSbsReMpb;
+    private Texture anchorSbsLastSyncedTexture;
+    // URP Unlit 用 _BaseMap；Custom/SampleRT fallback 用 _mainRT
+    private string anchorSbsTexPropName = "_BaseMap";
 
     // 与 SetLERE.cs 中私有字段默认值一致（matLE 尚未写入时用于 Anchor 诊断）
     private const float AnchorRtVisibleRatioDefault = 0.555f;
@@ -230,21 +238,22 @@ public class ToggleCameraClippingPlane : MonoBehaviour
         if (headLockedSbsRawImage != null && !ReferenceEquals(headLockedSbsRawImage.texture, tex))
             headLockedSbsRawImage.texture = tex;
 
-        // ── AnchorSBS 纹理同步（诊断期间暂时注释，EyeTest Shader 不需要纹理）──
-        // if (anchorSbsRawImage != null && !ReferenceEquals(anchorSbsRawImage.texture, tex))
-        // {
-        //     anchorSbsRawImage.texture = tex;
-        //     anchorSbsRawImage.color   = Color.white;
-        // }
-        // ── 诊断结束后取消注释，恢复真实图传纹理绑定 ──────────────────────
-
-        // ── 首次纹理绑定成功日志（避免每帧刷屏）────────────────────────────
-        if (currentMode == DisplayMode.AnchorSBS && !anchorSbsPipelineBoundLogged)
+        // ── AnchorSBS 图传纹理同步：直接赋给 RawImage.texture，uvRect 保持不变 ──
+        if (currentMode == DisplayMode.AnchorSBS &&
+            anchorSbsRawImage != null && anchorSbsRawImageRE != null)
         {
-            if (anchorSbsRawImage != null && ReferenceEquals(anchorSbsRawImage.texture, tex))
+            if (!ReferenceEquals(anchorSbsLastSyncedTexture, tex))
             {
-                anchorSbsPipelineBoundLogged = true;
-                LogAnchorSbsPipelineStatus("texture-bound");
+                anchorSbsLastSyncedTexture  = tex;
+                anchorSbsRawImage.texture   = tex;   // LE：uvRect=(0,  0,0.5,1) 自动裁左半
+                anchorSbsRawImageRE.texture = tex;   // RE：uvRect=(0.5,0,0.5,1) 自动裁右半
+                if (!anchorSbsPipelineBoundLogged)
+                {
+                    anchorSbsPipelineBoundLogged = true;
+                    LogWindow.Info(
+                        $"AnchorSBS: 纹理首次绑定 {tex.width}x{tex.height} " +
+                        $"LE.uvRect={anchorSbsRawImage.uvRect} RE.uvRect={anchorSbsRawImageRE.uvRect}");
+                }
             }
         }
     }
@@ -284,6 +293,12 @@ public class ToggleCameraClippingPlane : MonoBehaviour
             anchorSbsRawImageRE = null;
             anchorSbsLeftHalfMaterial = null;
             anchorSbsRightHalfMaterial = null;
+            anchorSbsLeRenderer = null;
+            anchorSbsReRenderer = null;
+            anchorSbsLeMpb = null;
+            anchorSbsReMpb = null;
+            anchorSbsLastSyncedTexture = null;
+            anchorSbsTexPropName = "_BaseMap";
         }
 
         if (anchorTransform == null || headLockedSbsRoot == null)
@@ -295,10 +310,10 @@ public class ToggleCameraClippingPlane : MonoBehaviour
     }
 
     /// <summary>
-    /// 在锚点处创建两个 3D Quad（MeshRenderer），与 SetLERE 的 CanvLE/CanvRE 完全同构：
-    /// - LE Quad：与 CanvLE 同图层，Camera Culling Mask 只允许左眼相机看到
-    /// - RE Quad：与 CanvRE 同图层，Camera Culling Mask 只允许右眼相机看到
-    /// [诊断模式] Custom/SampleRT + 1×1 纯色 _mainRT（左眼蓝 / 右眼红），参数与 SetLERE 一致。
+    /// 在锚点处创建两个 World Space Canvas + RawImage，对应左右眼各一块：
+    /// - LE：leLayer 图层，uvRect=(0,   0, 0.5, 1) → 采样 SBS 左半幅
+    /// - RE：reLayer 图层，uvRect=(0.5, 0, 0.5, 1) → 采样 SBS 右半幅
+    /// 通过 Canvas 渲染路径（UGUI）完全绕开 URP MeshRenderer + CBUFFER tiling/offset 问题。
     /// </summary>
     private void CreateAnchorPlaceholderFrame(Transform parentAnchor)
     {
@@ -308,44 +323,86 @@ public class ToggleCameraClippingPlane : MonoBehaviour
         float width  = anchorFrameHeight * (1080f / 720f) * frameScale;
         float height = anchorFrameHeight * frameScale;
 
-        // 从 SetLERE 继承图层，确保与正在工作的 StereoSplit 图层隔离完全一致
         int leLayer = (setLere != null && setLere.CanvLE != null) ? setLere.CanvLE.layer : 0;
         int reLayer = (setLere != null && setLere.CanvRE != null) ? setLere.CanvRE.layer : 0;
         LogWindow.Info($"AnchorSBS: 继承图层 leLayer={leLayer}({LayerMask.LayerToName(leLayer)}), " +
                        $"reLayer={reLayer}({LayerMask.LayerToName(reLayer)})");
 
-        // [诊断日志] 打印摄像机 Culling Mask，确认 leLayer/reLayer 是否被渲染
-        LogCameraCullingMask(leLayer, reLayer);
-
-        // 父容器（纯空 GameObject，SetActive 统一控制两个 Quad 显隐）
-        // 注意：不挂在 parentAnchor 的层级下，而是独立放在场景根，
-        // 由 Update() 主动跟随锚点位置。
-        // 原因：SpatialAnchorRuntimeHost 锚点创建失败时会 Destroy(gameObject)，
-        // 若 AnchorSBS_Root 是其子节点，会被一并销毁导致画布消失。
+        // 父容器：独立场景根节点，Update() 跟随锚点位置
         anchorSbsRoot = new GameObject("AnchorSBS_Root");
         anchorSbsRoot.transform.SetPositionAndRotation(parentAnchor.position, parentAnchor.rotation);
         anchorSbsRoot.transform.localScale = Vector3.one;
 
-        // [诊断] LE Quad → 蓝色，RE Quad → 红色；微小 local X 偏移减轻同层 Z-fighting
-        const float diagHalfSeparation = 0.012f;
-        anchorSbsLeftHalfMaterial  = CreateAnchorDiagQuad(
-            "AnchorSBS_Quad_LE", anchorSbsRoot.transform, leLayer,
-            new Vector3(width, height, 1f), Color.blue, isLE: true,
-            new Vector3(-diagHalfSeparation, 0f, 0f));
+        // LE: SBS 左半幅
+        anchorSbsRawImage = CreateAnchorWorldSpaceRawImage(
+            "AnchorSBS_LE", anchorSbsRoot.transform, leLayer, width, height,
+            new Rect(0f, 0f, 0.5f, 1f));
 
-        anchorSbsRightHalfMaterial = CreateAnchorDiagQuad(
-            "AnchorSBS_Quad_RE", anchorSbsRoot.transform, reLayer,
-            new Vector3(width, height, 1f), Color.red, isLE: false,
-            new Vector3(diagHalfSeparation, 0f, 0f));
+        // RE: SBS 右半幅
+        anchorSbsRawImageRE = CreateAnchorWorldSpaceRawImage(
+            "AnchorSBS_RE", anchorSbsRoot.transform, reLayer, width, height,
+            new Rect(0.5f, 0f, 0.5f, 1f));
 
-        // 不再使用 RawImage
-        anchorSbsRawImage   = null;
-        anchorSbsRawImageRE = null;
+        // 清空 MeshRenderer/MPB 路径字段（本路径不再使用）
+        anchorSbsLeRenderer        = null;
+        anchorSbsReRenderer        = null;
+        anchorSbsLeMpb             = null;
+        anchorSbsReMpb             = null;
+        anchorSbsLeftHalfMaterial  = null;
+        anchorSbsRightHalfMaterial = null;
+        anchorSbsLastSyncedTexture = null;
 
         LogWindow.Info(
-            $"AnchorSBS [诊断]: 已创建 3D Quad 双目画布（左眼=蓝 / 右眼=红）" +
-            $" size=({width:F3}m,{height:F3}m)");
-        LogAnchorSbsDiagStepSummary(leLayer, reLayer);
+            $"AnchorSBS: 双 Canvas+RawImage 创建完成 size=({width:F3}m,{height:F3}m) " +
+            $"leLayer={leLayer} reLayer={reLayer} " +
+            $"LE={(anchorSbsRawImage != null ? "OK" : "NULL")} " +
+            $"RE={(anchorSbsRawImageRE != null ? "OK" : "NULL")}");
+    }
+
+    /// <summary>
+    /// 创建一个 World Space Canvas + RawImage，供 AnchorSBS 左/右眼各用一块。
+    /// uvRect 决定采样范围：LE=(0,0,0.5,1)，RE=(0.5,0,0.5,1)。
+    /// Canvas 渲染走 UGUI 路径，不受 URP MeshRenderer CBUFFER 限制。
+    /// </summary>
+    private RawImage CreateAnchorWorldSpaceRawImage(
+        string objName, Transform parent, int layer,
+        float worldWidth, float worldHeight, Rect uvRect)
+    {
+        // Canvas（World Space）
+        var canvasObj = new GameObject(objName);
+        canvasObj.layer = layer;
+        canvasObj.transform.SetParent(parent, false);
+        canvasObj.transform.localPosition = Vector3.zero;
+        canvasObj.transform.localRotation = Quaternion.identity;
+        canvasObj.transform.localScale    = Vector3.one;
+
+        var canvas = canvasObj.AddComponent<Canvas>();
+        canvas.renderMode   = RenderMode.WorldSpace;
+        canvas.sortingOrder = anchorSbsCanvasSortingOrder;
+
+        // sizeDelta 直接以世界单位（米）设定画布尺寸（World Space 下 scale=1 时 1px = 1unit）
+        var rt = canvasObj.GetComponent<RectTransform>();
+        rt.sizeDelta = new Vector2(worldWidth, worldHeight);
+
+        // 全铺 RawImage 子对象
+        var imgObj = new GameObject(objName + "_Img");
+        imgObj.layer = layer;
+        imgObj.transform.SetParent(canvasObj.transform, false);
+        var imgRt         = imgObj.AddComponent<RectTransform>();
+        imgRt.anchorMin   = Vector2.zero;
+        imgRt.anchorMax   = Vector2.one;
+        imgRt.offsetMin   = Vector2.zero;
+        imgRt.offsetMax   = Vector2.zero;
+        imgRt.pivot       = new Vector2(0.5f, 0.5f);
+
+        var rawImage      = imgObj.AddComponent<RawImage>();
+        rawImage.uvRect   = uvRect;
+        rawImage.color    = Color.white;
+
+        LogWindow.Info(
+            $"AnchorSBS: {objName} WorldSpace Canvas size=({worldWidth:F3},{worldHeight:F3})m " +
+            $"layer={layer}({LayerMask.LayerToName(layer)}) uvRect={uvRect}");
+        return rawImage;
     }
 
     /// <summary>分步调试：创建完成后在 LogWindow 中打印核对清单。</summary>
